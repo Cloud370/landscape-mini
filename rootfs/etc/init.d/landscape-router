@@ -1,0 +1,22 @@
+#!/sbin/openrc-run
+
+description="Landscape Router"
+command="/root/landscape-webserver"
+command_background=true
+pidfile="/run/${RC_SVCNAME}.pid"
+
+depend() {
+    need localmount
+    after bootmisc
+}
+
+start_pre() {
+    if [ ! -f /root/.landscape-router/landscape_init.toml ]; then
+        command_args="--auto"
+    fi
+    ulimit -l unlimited
+    # Ensure bpffs is mounted (required by eBPF maps)
+    if ! mountpoint -q /sys/fs/bpf; then
+        mount -t bpf bpf /sys/fs/bpf
+    fi
+}

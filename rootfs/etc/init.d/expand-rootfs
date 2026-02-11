@@ -1,0 +1,13 @@
+#!/sbin/openrc-run
+
+description="Expand root filesystem to fill disk"
+
+depend() {
+    need localmount
+}
+
+start() {
+    ebegin "Expanding root filesystem"
+    /usr/local/bin/expand-rootfs.sh
+    eend $?
+}

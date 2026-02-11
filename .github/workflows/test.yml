@@ -15,6 +15,8 @@ jobs:
         include:
           - variant: default
           - variant: docker
+          - variant: alpine
+          - variant: alpine-docker
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -40,13 +42,16 @@ jobs:
         with:
           name: landscape-mini-x86-${{ matrix.variant }}
           path: output/
-          workflow: build.yml
+          workflow: ci.yml
           search_artifacts: true
 
       - name: Run health checks (${{ matrix.variant }})
         run: |
           ls -lh output/
           ./tests/test-auto.sh output/*.img
+
+      - name: Run E2E network tests (${{ matrix.variant }})
+        run: ./tests/test-e2e.sh output/*.img
 
       - name: Upload test logs
         if: always()

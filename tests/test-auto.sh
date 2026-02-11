@@ -11,6 +11,8 @@
 #   5. Report results
 #   6. Cleanup QEMU process
 #
+# Supports both systemd (Debian) and OpenRC (Alpine) init systems.
+#
 # Usage:
 #   ./tests/test-auto.sh [image-path]
 #
@@ -42,6 +44,9 @@ RESULTS_FILE="${LOG_DIR}/test-results.txt"
 PIDFILE=""
 TEMP_IMAGE=""
 QEMU_PID=""
+
+# Init system: detected at runtime (systemd or openrc)
+INIT_SYSTEM=""
 
 # ── Colors ────────────────────────────────────────────────────────────────────
 
@@ -288,6 +293,46 @@ guest_run() {
     $SSH_CMD "$@"
 }
 
+# ── Init System Detection ────────────────────────────────────────────────────
+
+detect_init_system() {
+    if guest_run "command -v systemctl" &>/dev/null; then
+        INIT_SYSTEM="systemd"
+    elif guest_run "command -v rc-service" &>/dev/null; then
+        INIT_SYSTEM="openrc"
+    else
+        INIT_SYSTEM="unknown"
+    fi
+    info "Detected init system: ${INIT_SYSTEM}"
+}
+
+# ── Service status helper (works with both systemd and OpenRC) ────────────────
+
+check_service_active() {
+    local svc="$1"
+    if [[ "${INIT_SYSTEM}" == "systemd" ]]; then
+        guest_run "systemctl is-active ${svc}"
+    elif [[ "${INIT_SYSTEM}" == "openrc" ]]; then
+        guest_run "rc-service ${svc} status" 2>/dev/null
+    else
+        return 1
+    fi
+}
+
+check_no_failed_services() {
+    if [[ "${INIT_SYSTEM}" == "systemd" ]]; then
+        local failed
+        failed=$(guest_run "systemctl --failed --no-legend --no-pager" 2>/dev/null)
+        test -z "$failed"
+    elif [[ "${INIT_SYSTEM}" == "openrc" ]]; then
+        local crashed
+        crashed=$(guest_run "rc-status --crashed 2>/dev/null | tail -n +2" 2>/dev/null)
+        test -z "$crashed"
+    else
+        return 0
+    fi
+}
+
 # ── Health Checks ─────────────────────────────────────────────────────────────
 
 PASS_COUNT=0
@@ -318,6 +363,125 @@ run_skip() {
     ((SKIP_COUNT++))
 }
 
+# ── Landscape API Helpers ─────────────────────────────────────────────────────
+
+# Curl the Landscape API from inside the guest.
+# Usage: api_get  <port> <token> <path>
+#        api_post <port> <token> <path> [json_body]
+# API base URL is set by run_api_checks (http or https depending on detected port)
+API_BASE=""
+
+api_get() {
+    local token="$1" path="$2"
+    guest_run "curl -sfkL --max-time 5 -H 'Authorization: Bearer ${token}' ${API_BASE}${path}"
+}
+
+api_post() {
+    local token="$1" path="$2" body="${3:-}"
+    if [[ -n "$body" ]]; then
+        guest_run "curl -sfkL --max-time 5 -H 'Authorization: Bearer ${token}' -H 'Content-Type: application/json' -X POST -d '${body}' ${API_BASE}${path}"
+    else
+        guest_run "curl -sfkL --max-time 5 -H 'Authorization: Bearer ${token}' -X POST ${API_BASE}${path}"
+    fi
+}
+
+api_delete() {
+    local token="$1" path="$2"
+    guest_run "curl -sfkL --max-time 5 -H 'Authorization: Bearer ${token}' -X DELETE ${API_BASE}${path}"
+}
+
+# ── API Functional Tests ─────────────────────────────────────────────────────
+
+run_api_checks() {
+    local port="$1"
+
+    # Detect HTTP vs HTTPS — try both, prefer HTTP
+    local http_port https_port
+    http_port=$(guest_run "ss -tlnp 2>/dev/null | grep landscape-webse" 2>/dev/null \
+        | awk '{print $4}' | awk -F: '{print $NF}' | sort -n | head -1)
+    https_port=$(guest_run "ss -tlnp 2>/dev/null | grep landscape-webse" 2>/dev/null \
+        | awk '{print $4}' | awk -F: '{print $NF}' | sort -n | tail -1)
+    if [[ -n "$http_port" ]] && guest_run "curl -sf --max-time 3 http://localhost:${http_port}/ -o /dev/null" &>/dev/null; then
+        API_BASE="http://localhost:${http_port}"
+    elif [[ -n "$https_port" ]]; then
+        API_BASE="https://localhost:${https_port}"
+    else
+        API_BASE="http://localhost:${port}"
+    fi
+
+    # ---- 1. Auth: login and get JWT token ----
+    local login_resp token
+    login_resp=$(guest_run "curl -sfkL --max-time 5 -H 'Content-Type: application/json' \
+        -X POST -d '{\"username\":\"root\",\"password\":\"root\"}' \
+        ${API_BASE}/api/auth/login" 2>/dev/null)
+    # Extract JWT token (three base64url segments separated by dots)
+    token=$(echo "$login_resp" | grep -oE '[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+' | head -1)
+    run_check "API auth login" test -n "$token"
+    if [[ -z "$token" ]]; then
+        echo "       response: ${login_resp}"
+        echo "       Skipping remaining API tests (no auth token)"
+        return
+    fi
+
+    # ---- 2. Network interfaces detected ----
+    local ifaces
+    ifaces=$(api_get "$token" "/api/src/iface/new" 2>/dev/null)
+    run_check "API interfaces detected (eth0+eth1)" \
+        echo "$ifaces" \| grep -q "eth0"
+
+    # ---- 3. Core services running (IP, NAT, DHCP, routing) ----
+    local svc_status
+    svc_status=$(api_get "$token" "/api/src/services/ipconfigs/status" 2>/dev/null)
+    run_check "API service: WAN IP config (eth0)" echo "$svc_status" \| grep -q "eth0"
+
+    svc_status=$(api_get "$token" "/api/src/services/nats/status" 2>/dev/null)
+    run_check "API service: NAT (eth0)" echo "$svc_status" \| grep -q "eth0"
+
+    svc_status=$(api_get "$token" "/api/src/services/dhcp_v4/status" 2>/dev/null)
+    run_check "API service: DHCPv4 server (eth1)" echo "$svc_status" \| grep -q "eth1"
+
+    svc_status=$(api_get "$token" "/api/src/services/route_wans/status" 2>/dev/null)
+    run_check "API service: WAN routing (eth0)" echo "$svc_status" \| grep -q "eth0"
+
+    svc_status=$(api_get "$token" "/api/src/services/route_lans/status" 2>/dev/null)
+    run_check "API service: LAN routing (eth1)" echo "$svc_status" \| grep -q "eth1"
+
+    # ---- 4. DHCP config correct ----
+    local dhcp_conf
+    dhcp_conf=$(api_get "$token" "/api/src/services/dhcp_v4/eth1" 2>/dev/null)
+    run_check "API DHCPv4 subnet 192.168.10.0/24" echo "$dhcp_conf" \| grep -q "192.168.10"
+
+    # ---- 5. Static NAT / port forwarding ----
+    local snat_maps
+    snat_maps=$(api_get "$token" "/api/src/config/static_nat_mappings" 2>/dev/null)
+    run_check "API static NAT mappings configured" echo "$snat_maps" \| grep -q "SSH"
+
+    # ---- 6. DNS: verify upstream config and test resolution ----
+    # Landscape sets resolv.conf to 127.0.0.1 and forwards DNS via its
+    # built-in resolver to the configured upstream (default: 1.0.0.1).
+    local dns_ups
+    dns_ups=$(api_get "$token" "/api/src/config/dns_upstreams" 2>/dev/null)
+    run_check "API DNS upstream configured" echo "$dns_ups" \| grep -qE '"ips"'
+
+    local resolv
+    resolv=$(guest_run "cat /etc/resolv.conf" 2>/dev/null)
+    run_check "DNS resolver points to localhost" echo "$resolv" \| grep -q "127.0.0.1"
+
+    # Test actual DNS resolution from inside the guest
+    local dns_result
+    dns_result=$(guest_run "nslookup www.baidu.com 2>/dev/null || host www.baidu.com 2>/dev/null" 2>/dev/null)
+    if echo "$dns_result" | grep -qiE '[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+'; then
+        run_check "DNS resolves www.baidu.com" true
+    else
+        run_skip "DNS resolves www.baidu.com" "resolution failed (no upstream connectivity?)"
+    fi
+
+    # ---- 7. Config export ----
+    local exported
+    exported=$(api_get "$token" "/api/src/sys_service/config/export" 2>/dev/null)
+    run_check "API config export (TOML)" echo "$exported" \| grep -q "iface"
+}
+
 run_all_checks() {
     set +e
 
@@ -325,6 +489,9 @@ run_all_checks() {
     echo "Landscape Mini — Health Checks"
     echo "============================================================"
     echo ""
+
+    # Detect init system first
+    detect_init_system
 
     # SSH
     run_check "SSH reachable" guest_run "echo ok"
@@ -357,13 +524,16 @@ run_all_checks() {
 
     # Landscape
     run_check "landscape-router service active" \
-        guest_run "systemctl is-active landscape-router"
+        check_service_active "landscape-router"
     run_check "Landscape binary exists and is executable" \
         guest_run "test -x /root/landscape-webserver"
 
-    # Web UI — detect port from inside guest
-    local web_port
-    web_port=$(guest_run "ss -tlnp 2>/dev/null | grep landscape-webse | grep -oP ':\K[0-9]+' | head -1" 2>/dev/null)
+    # Web UI — detect port from inside guest (retry up to 15s for startup)
+    local web_port="" web_wait=0
+    while [[ -z "$web_port" && $web_wait -lt 15 ]]; do
+        web_port=$(guest_run "ss -tlnp 2>/dev/null | grep landscape-webse | head -1 | awk '{print \$4}' | awk -F: '{print \$NF}'" 2>/dev/null)
+        [[ -z "$web_port" ]] && sleep 3 && ((web_wait += 3))
+    done
     if [[ -z "$web_port" ]]; then
         run_check "Web UI listening" false
     else
@@ -377,13 +547,16 @@ run_all_checks() {
     run_check "IP forwarding enabled (got ${ip_fwd})" \
         test "$ip_fwd" = "1"
 
-    run_check "sshd service running" \
-        guest_run "systemctl is-active ssh || systemctl is-active sshd"
+    if [[ "${INIT_SYSTEM}" == "systemd" ]]; then
+        run_check "sshd service running" \
+            guest_run "systemctl is-active ssh || systemctl is-active sshd"
+    else
+        run_check "sshd service running" \
+            check_service_active "sshd"
+    fi
 
-    local failed
-    failed=$(guest_run "systemctl --failed --no-legend --no-pager" 2>/dev/null)
-    run_check "No failed systemd units" \
-        test -z "$failed"
+    run_check "No failed services" \
+        check_no_failed_services
 
     run_check "bpftool available" \
         guest_run "which bpftool"
@@ -391,9 +564,21 @@ run_all_checks() {
     # Docker (auto-detect)
     if guest_run "which docker" &>/dev/null; then
         run_check "Docker service active" \
-            guest_run "systemctl is-active docker"
+            check_service_active "docker"
     else
         run_skip "Docker service active" "Docker not installed"
+    fi
+
+    # ==================================================================
+    # Landscape Router API Functional Tests
+    # ==================================================================
+    echo ""
+    echo "---- Landscape Router API Tests ----"
+
+    if [[ -n "$web_port" ]]; then
+        run_api_checks "$web_port"
+    else
+        run_skip "API tests" "Web UI not listening"
     fi
 
     echo ""

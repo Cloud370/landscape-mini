@@ -12,20 +12,26 @@ on:
     paths:
       - build.sh
       - build.env
+      - lib/**
       - rootfs/**
       - configs/**
       - .github/workflows/**
 
 jobs:
-  build:
+  build-and-test:
     runs-on: ubuntu-24.04
     strategy:
+      fail-fast: false
       matrix:
         include:
           - variant: default
-            docker_flag: ""
+            build_flags: ""
           - variant: docker
-            docker_flag: "--with-docker"
+            build_flags: "--with-docker"
+          - variant: alpine
+            build_flags: "--base alpine"
+          - variant: alpine-docker
+            build_flags: "--base alpine --with-docker"
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -42,13 +48,18 @@ jobs:
       - name: Install dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y debootstrap parted dosfstools e2fsprogs grub-efi-amd64-bin grub-pc-bin rsync curl
+          sudo apt-get install -y debootstrap parted dosfstools e2fsprogs \
+            grub-efi-amd64-bin grub-pc-bin qemu-utils rsync curl \
+            sshpass socat qemu-system-x86 ovmf
 
       - name: Build Image (${{ matrix.variant }})
         run: |
           VERSION="${{ github.event.inputs.landscape_version || 'latest' }}"
-          sudo APT_MIRROR="" OUTPUT_FORMAT=img COMPRESS_OUTPUT=no \
-            ./build.sh --version "$VERSION" ${{ matrix.docker_flag }}
+          sudo APT_MIRROR="" ALPINE_MIRROR="" OUTPUT_FORMAT=img COMPRESS_OUTPUT=no \
+            ./build.sh --version "$VERSION" ${{ matrix.build_flags }}
+
+      - name: Fix output permissions
+        run: sudo chown -R "$(id -u):$(id -g)" output/ work/
 
       - name: List outputs
         run: ls -lh output/
@@ -60,33 +71,11 @@ jobs:
           path: output/*.img
           retention-days: 30
 
-  test:
-    needs: build
-    runs-on: ubuntu-24.04
-    strategy:
-      matrix:
-        include:
-          - variant: default
-          - variant: docker
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Install test dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y sshpass socat curl qemu-system-x86 ovmf
-
-      - name: Download image
-        uses: actions/download-artifact@v4
-        with:
-          name: landscape-mini-x86-${{ matrix.variant }}
-          path: output/
-
       - name: Run health checks (${{ matrix.variant }})
-        run: |
-          ls -lh output/
-          ./tests/test-auto.sh output/*.img
+        run: ./tests/test-auto.sh output/*.img
+
+      - name: Run E2E network tests (${{ matrix.variant }})
+        run: ./tests/test-e2e.sh output/*.img
 
       - name: Upload test logs
         if: always()
