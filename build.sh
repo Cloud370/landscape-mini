@@ -180,13 +180,15 @@ phase_create_image() {
     echo "  Creating ${IMAGE_SIZE_MB}MB raw image ..."
     dd if=/dev/zero of="${IMAGE_FILE}" bs=1M count="${IMAGE_SIZE_MB}" status=progress
 
-    # Partition with GPT: ESP (1-65MiB) + root (65MiB - 100%)
-    echo "  Partitioning (GPT) ..."
+    # Partition with GPT: BIOS boot (1-2MiB) + ESP (2-66MiB) + root (66MiB - 100%)
+    echo "  Partitioning (GPT: BIOS + UEFI hybrid) ..."
     parted -s "${IMAGE_FILE}" \
         mklabel gpt \
-        mkpart ESP fat32 1MiB 65MiB \
-        set 1 esp on \
-        mkpart root ext4 65MiB 100%
+        mkpart bios 1MiB 2MiB \
+        set 1 bios_grub on \
+        mkpart ESP fat32 2MiB 66MiB \
+        set 2 esp on \
+        mkpart root ext4 66MiB 100%
 
     # Setup loop device
     echo "  Setting up loop device ..."
@@ -198,21 +200,21 @@ phase_create_image() {
     partprobe "${LOOP_DEV}" 2>/dev/null || true
     sleep 1
 
-    # Format partitions
+    # Format partitions (partition 1 = BIOS boot, no filesystem needed)
     echo "  Formatting EFI partition (FAT32) ..."
-    mkfs.vfat -F32 "${LOOP_DEV}p1"
+    mkfs.vfat -F32 "${LOOP_DEV}p2"
 
     echo "  Formatting root partition (ext4, no journal, 1% reserved) ..."
-    mkfs.ext4 -F -O ^has_journal -m 1 "${LOOP_DEV}p2"
+    mkfs.ext4 -F -O ^has_journal -m 1 "${LOOP_DEV}p3"
 
     # Mount root
     echo "  Mounting root filesystem ..."
-    mount "${LOOP_DEV}p2" "${ROOTFS_DIR}"
+    mount "${LOOP_DEV}p3" "${ROOTFS_DIR}"
 
     # Mount EFI
     mkdir -p "${ROOTFS_DIR}/boot/efi"
     echo "  Mounting EFI partition ..."
-    mount "${LOOP_DEV}p1" "${ROOTFS_DIR}/boot/efi"
+    mount "${LOOP_DEV}p2" "${ROOTFS_DIR}/boot/efi"
 
     echo "  Phase 2 complete."
 }
@@ -270,8 +272,8 @@ EOF
     echo "  Writing /etc/fstab ..."
     local ROOT_UUID
     local EFI_UUID
-    ROOT_UUID=$(blkid -s UUID -o value "${LOOP_DEV}p2")
-    EFI_UUID=$(blkid -s UUID -o value "${LOOP_DEV}p1")
+    ROOT_UUID=$(blkid -s UUID -o value "${LOOP_DEV}p3")
+    EFI_UUID=$(blkid -s UUID -o value "${LOOP_DEV}p2")
 
     cat > "${ROOTFS_DIR}/etc/fstab" <<EOF
 # <filesystem>                          <mount>     <type>  <options>           <dump>  <pass>
@@ -287,6 +289,7 @@ EOF
         apt-get install -y --no-install-recommends \
             linux-image-amd64 \
             grub-efi-amd64 \
+            grub-pc-bin \
             initramfs-tools \
             iproute2 \
             iptables \
@@ -319,6 +322,9 @@ EOF
             --bootloader-id=landscape \
             --removable \
             --no-nvram
+        grub-install \
+            --target=i386-pc \
+            ${LOOP_DEV}
         update-grub
     "
 
@@ -650,16 +656,16 @@ phase_cleanup_and_shrink() {
 
     # Shrink the ext4 filesystem
     echo "  Running filesystem check ..."
-    e2fsck -f -y "${LOOP_DEV}p2" || true
+    e2fsck -f -y "${LOOP_DEV}p3" || true
 
     echo "  Shrinking ext4 filesystem to minimum size ..."
-    resize2fs -M "${LOOP_DEV}p2"
+    resize2fs -M "${LOOP_DEV}p3"
 
     # Get the actual filesystem size after shrink
     echo "  Calculating final image size ..."
     local ROOT_BLOCKS ROOT_BLOCKSIZE ROOT_BYTES
-    ROOT_BLOCKS=$(dumpe2fs -h "${LOOP_DEV}p2" 2>/dev/null | grep "Block count:" | awk '{print $3}')
-    ROOT_BLOCKSIZE=$(dumpe2fs -h "${LOOP_DEV}p2" 2>/dev/null | grep "Block size:" | awk '{print $3}')
+    ROOT_BLOCKS=$(dumpe2fs -h "${LOOP_DEV}p3" 2>/dev/null | grep "Block count:" | awk '{print $3}')
+    ROOT_BLOCKSIZE=$(dumpe2fs -h "${LOOP_DEV}p3" 2>/dev/null | grep "Block size:" | awk '{print $3}')
     ROOT_BYTES=$(( ROOT_BLOCKS * ROOT_BLOCKSIZE ))
 
     # Detach loop device first (before modifying partition table)
@@ -667,19 +673,19 @@ phase_cleanup_and_shrink() {
     losetup -d "${LOOP_DEV}"
     LOOP_DEV=""
 
-    # Partition 2 starts at sector 133120 (65MiB = 68157440 bytes / 512)
-    local PART2_START_SECTOR=133120
+    # Partition 3 starts at sector 135168 (66MiB = 69206016 bytes / 512)
+    local PART3_START_SECTOR=135168
     # Calculate new partition end sector (align to 2048-sector / 1MiB boundary)
     local ROOT_SECTORS=$(( ROOT_BYTES / 512 ))
-    local PART2_END_SECTOR=$(( PART2_START_SECTOR + ROOT_SECTORS ))
-    PART2_END_SECTOR=$(( ((PART2_END_SECTOR + 2047) / 2048) * 2048 ))
+    local PART3_END_SECTOR=$(( PART3_START_SECTOR + ROOT_SECTORS ))
+    PART3_END_SECTOR=$(( ((PART3_END_SECTOR + 2047) / 2048) * 2048 ))
     # Total image: partition end + 2048 sectors (1MiB) for GPT backup header
-    local TOTAL_SECTORS=$(( PART2_END_SECTOR + 2048 ))
+    local TOTAL_SECTORS=$(( PART3_END_SECTOR + 2048 ))
     local TOTAL_BYTES=$(( TOTAL_SECTORS * 512 ))
 
-    # Resize partition 2 in GPT to match the shrunk filesystem
-    echo "  Resizing partition 2 in GPT ..."
-    sgdisk -d 2 -n 2:${PART2_START_SECTOR}:${PART2_END_SECTOR} -t 2:8300 "${IMAGE_FILE}"
+    # Resize partition 3 in GPT to match the shrunk filesystem
+    echo "  Resizing partition 3 in GPT ..."
+    sgdisk -d 3 -n 3:${PART3_START_SECTOR}:${PART3_END_SECTOR} -t 3:8300 "${IMAGE_FILE}"
 
     # Truncate the image to the new size
     echo "  Truncating image to $(( TOTAL_BYTES / 1048576 )) MB ..."
@@ -784,9 +790,9 @@ resume_from_image() {
     partprobe "${LOOP_DEV}" 2>/dev/null || true
     sleep 1
     mkdir -p "${ROOTFS_DIR}"
-    mount "${LOOP_DEV}p2" "${ROOTFS_DIR}"
+    mount "${LOOP_DEV}p3" "${ROOTFS_DIR}"
     mkdir -p "${ROOTFS_DIR}/boot/efi"
-    mount "${LOOP_DEV}p1" "${ROOTFS_DIR}/boot/efi"
+    mount "${LOOP_DEV}p2" "${ROOTFS_DIR}/boot/efi"
     # Mount special filesystems for chroot
     mount --bind /dev "${ROOTFS_DIR}/dev"
     mount --bind /dev/pts "${ROOTFS_DIR}/dev/pts"
