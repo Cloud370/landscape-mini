@@ -4,7 +4,7 @@
 
 [中文](README.md) | English | [**Download Latest**](https://github.com/Cloud370/landscape-mini/releases/latest)
 
-Minimal x86 image builder for Landscape Router. Supports both **Debian Trixie** and **Alpine Linux** as base systems, producing small, optimized disk images (~150–500MB) with dual BIOS+UEFI boot. Alpine images are ~50% smaller than Debian.
+Minimal x86 image builder for Landscape Router. Supports both **Debian Trixie** and **Alpine Linux** as base systems, producing small, optimized disk images (as small as ~76MB compressed) with dual BIOS+UEFI boot.
 
 Upstream: [Landscape Router](https://github.com/ThisSeanZhang/landscape)
 

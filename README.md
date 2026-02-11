@@ -4,7 +4,7 @@
 
 [English](README_EN.md) | 中文 | [**下载最新镜像**](https://github.com/Cloud370/landscape-mini/releases/latest)
 
-Landscape Router 的最小化 x86 镜像构建器。支持 **Debian Trixie** 和 **Alpine Linux** 两种基础系统，生成精简磁盘镜像（~150–500MB），支持 BIOS + UEFI 双启动。Alpine 镜像比 Debian 小约 50%。
+Landscape Router 的最小化 x86 镜像构建器。支持 **Debian Trixie** 和 **Alpine Linux** 两种基础系统，生成精简磁盘镜像（最小 ~76MB 压缩），支持 BIOS + UEFI 双启动。
 
 上游项目：[Landscape Router](https://github.com/ThisSeanZhang/landscape)
 

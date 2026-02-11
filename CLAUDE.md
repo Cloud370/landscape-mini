@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-Landscape Mini is a minimal x86 image builder for the Landscape Router. It supports both **Debian Trixie** and **Alpine Linux** as base systems, producing small, optimized disk images (~150-500MB) with dual BIOS+UEFI boot support. Alpine images are ~50% smaller than Debian thanks to musl libc and OpenRC.
+Landscape Mini is a minimal x86 image builder for the Landscape Router. It supports both **Debian Trixie** and **Alpine Linux** as base systems, producing small, optimized disk images (as small as ~76MB compressed) with dual BIOS+UEFI boot support.
 
 Upstream router project: https://github.com/ThisSeanZhang/landscape
 
