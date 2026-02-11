@@ -42,7 +42,7 @@ jobs:
         with:
           name: landscape-mini-x86-${{ matrix.variant }}
           path: output/
-          workflow: build.yml
+          workflow: ci.yml
           search_artifacts: true
 
       - name: Run health checks (${{ matrix.variant }})
