@@ -48,9 +48,9 @@ SSH_TIMEOUT=120
 SHUTDOWN_TIMEOUT=15
 DHCP_TIMEOUT=120
 
-# CirrOS
+# CirrOS — use GitHub mirror (cirros-cloud.net is often unreachable from CI)
 CIRROS_VERSION="0.6.2"
-CIRROS_URL="https://download.cirros-cloud.net/${CIRROS_VERSION}/cirros-${CIRROS_VERSION}-x86_64-disk.img"
+CIRROS_URL="https://github.com/cirros-dev/cirros/releases/download/${CIRROS_VERSION}/cirros-${CIRROS_VERSION}-x86_64-disk.img"
 CIRROS_USER="cirros"
 CIRROS_PASSWORD="gocubsgo"
 
@@ -205,7 +205,10 @@ download_cirros() {
         info "CirrOS image already cached." >&2
     else
         info "Downloading CirrOS ${CIRROS_VERSION} ..." >&2
-        curl -L -o "${cirros_file}" "${CIRROS_URL}" >&2
+        if ! curl -fL --retry 3 --retry-delay 5 -o "${cirros_file}" "${CIRROS_URL}" >&2; then
+            fail "Failed to download CirrOS from ${CIRROS_URL}"
+            return 1
+        fi
         ok "CirrOS downloaded ($(du -h "${cirros_file}" | awk '{print $1}'))" >&2
     fi
 
