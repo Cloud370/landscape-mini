@@ -59,7 +59,7 @@ jobs:
             ./build.sh --version "$VERSION" ${{ matrix.build_flags }}
 
       - name: Fix output permissions
-        run: sudo chown -R "$(id -u):$(id -g)" output/
+        run: sudo chown -R "$(id -u):$(id -g)" output/ work/
 
       - name: List outputs
         run: ls -lh output/
