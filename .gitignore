@@ -1,0 +1,7 @@
+work/
+output/
+*.img
+*.vmdk
+*.gz
+*.xz
+downloads/

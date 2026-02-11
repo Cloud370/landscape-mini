@@ -1,0 +1,3 @@
+# Managed by Landscape Router - do not edit
+auto lo
+iface lo inet loopback
