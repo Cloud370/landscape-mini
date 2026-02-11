@@ -9,6 +9,7 @@ jobs:
   build-and-test:
     runs-on: ubuntu-24.04
     strategy:
+      fail-fast: false
       matrix:
         include:
           - variant: default
@@ -43,6 +44,9 @@ jobs:
         run: |
           sudo APT_MIRROR="" ALPINE_MIRROR="" OUTPUT_FORMAT=img COMPRESS_OUTPUT=no \
             ./build.sh ${{ matrix.build_flags }}
+
+      - name: Fix output permissions
+        run: sudo chown -R "$(id -u):$(id -g)" output/
 
       - name: List outputs
         run: ls -lh output/
