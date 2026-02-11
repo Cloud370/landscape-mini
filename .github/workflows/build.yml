@@ -61,28 +61,12 @@ jobs:
           path: output/*.img
           retention-days: 30
 
-      - name: Upload compressed raw image
-        if: hashFiles('output/*.img.gz') != ''
-        uses: actions/upload-artifact@v4
-        with:
-          name: landscape-mini-x86-img-gz
-          path: output/*.img.gz
-          retention-days: 30
-
       - name: Upload VMDK image
         if: hashFiles('output/*.vmdk') != ''
         uses: actions/upload-artifact@v4
         with:
           name: landscape-mini-x86-vmdk
           path: output/*.vmdk
-          retention-days: 30
-
-      - name: Upload compressed VMDK image
-        if: hashFiles('output/*.vmdk.gz') != ''
-        uses: actions/upload-artifact@v4
-        with:
-          name: landscape-mini-x86-vmdk-gz
-          path: output/*.vmdk.gz
           retention-days: 30
 
   release:
@@ -97,8 +81,17 @@ jobs:
           path: artifacts/
           merge-multiple: true
 
+      - name: Compress for release
+        run: |
+          cd artifacts
+          for f in *.img *.vmdk; do
+            [ -f "$f" ] && gzip -k "$f"
+          done
+          ls -lh
+
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
-          files: artifacts/*
+          files: |
+            artifacts/*.gz
           generate_release_notes: true
