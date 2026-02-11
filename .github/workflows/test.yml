@@ -1,0 +1,57 @@
+name: Test Image
+
+on:
+  workflow_dispatch:
+    inputs:
+      run_id:
+        description: "Build workflow run ID (leave empty for latest)"
+        default: ""
+
+jobs:
+  test:
+    runs-on: ubuntu-24.04
+    strategy:
+      matrix:
+        include:
+          - variant: default
+          - variant: docker
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install test dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y sshpass socat curl qemu-system-x86 ovmf
+
+      - name: Download image from build artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: landscape-mini-x86-${{ matrix.variant }}
+          path: output/
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          run-id: ${{ github.event.inputs.run_id || '' }}
+        continue-on-error: true
+        id: download-same-run
+
+      - name: Download latest image (fallback)
+        if: steps.download-same-run.outcome == 'failure'
+        uses: dawidd6/action-download-artifact@v6
+        with:
+          name: landscape-mini-x86-${{ matrix.variant }}
+          path: output/
+          workflow: build.yml
+          search_artifacts: true
+
+      - name: Run health checks (${{ matrix.variant }})
+        run: |
+          ls -lh output/
+          ./tests/test-auto.sh output/*.img
+
+      - name: Upload test logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-logs-${{ matrix.variant }}
+          path: output/test-logs/
+          retention-days: 7

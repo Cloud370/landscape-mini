@@ -15,10 +15,10 @@ make deps              # Install host build dependencies (one-time)
 make deps-test         # Install test dependencies (sshpass, socat, curl)
 make build             # Build image (requires sudo)
 make build-docker      # Build image with Docker included (requires sudo)
-make test              # Boot in QEMU headless (serial on stdio)
+make test              # Run automated health checks (non-interactive)
+make test-docker       # Run automated health checks on Docker image
+make test-serial       # Boot in QEMU (interactive serial console)
 make test-gui          # Boot in QEMU with VGA display
-make test-auto         # Run automated health checks (non-interactive)
-make test-auto-docker  # Run automated health checks on Docker image
 make ssh               # SSH into running QEMU instance (port 2222)
 make clean             # Remove work/ directory
 make distclean         # Remove work/ and output/

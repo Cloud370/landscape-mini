@@ -60,6 +60,42 @@ jobs:
           path: output/*.img
           retention-days: 30
 
+  test:
+    needs: build
+    runs-on: ubuntu-24.04
+    strategy:
+      matrix:
+        include:
+          - variant: default
+          - variant: docker
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install test dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y sshpass socat curl qemu-system-x86 ovmf
+
+      - name: Download image
+        uses: actions/download-artifact@v4
+        with:
+          name: landscape-mini-x86-${{ matrix.variant }}
+          path: output/
+
+      - name: Run health checks (${{ matrix.variant }})
+        run: |
+          ls -lh output/
+          ./tests/test-auto.sh output/*.img
+
+      - name: Upload test logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-logs-${{ matrix.variant }}
+          path: output/test-logs/
+          retention-days: 7
+
   release:
     needs: build
     runs-on: ubuntu-24.04

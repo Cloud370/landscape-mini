@@ -8,13 +8,13 @@
 # Usage:
 #   make              - Show all available targets
 #   make build        - Full build (without Docker)
-#   make test         - Boot image in QEMU (headless, serial console)
-#   make test-gui     - Boot image in QEMU (with VGA display)
+#   make test         - Run automated health checks (non-interactive)
+#   make test-serial  - Boot image in QEMU (interactive serial console)
 #
 # Default credentials:  root / landscape  |  ld / landscape
 # =============================================================================
 
-.PHONY: help deps deps-test build build-docker test test-gui test-auto test-auto-docker ssh clean distclean status
+.PHONY: help deps deps-test build build-docker test test-docker test-serial test-gui ssh clean distclean status
 
 # --------------------------------------------------------------------------
 # Configuration
@@ -72,7 +72,13 @@ build-docker: ## Full build with Docker included (requires sudo)
 # QEMU test targets
 # --------------------------------------------------------------------------
 
-test: $(IMAGE) ## Boot image in QEMU (headless, serial console on stdio)
+test: $(IMAGE) ## Run automated health checks (non-interactive)
+	./tests/test-auto.sh $(IMAGE)
+
+test-docker: output/landscape-mini-x86-docker.img ## Run automated health checks on Docker image
+	./tests/test-auto.sh output/landscape-mini-x86-docker.img
+
+test-serial: $(IMAGE) ## Boot image in QEMU (interactive serial console)
 	qemu-system-x86_64 \
 		-enable-kvm \
 		-m $(QEMU_MEM) \
@@ -85,12 +91,6 @@ test: $(IMAGE) ## Boot image in QEMU (headless, serial console on stdio)
 		-netdev user,id=lan \
 		-display none \
 		-serial mon:stdio
-
-test-auto: $(IMAGE) ## Run automated health checks (non-interactive)
-	./tests/test-auto.sh $(IMAGE)
-
-test-auto-docker: output/landscape-mini-x86-docker.img ## Run automated health checks on Docker image
-	./tests/test-auto.sh output/landscape-mini-x86-docker.img
 
 test-gui: $(IMAGE) ## Boot image in QEMU (with VGA display window)
 	qemu-system-x86_64 \
