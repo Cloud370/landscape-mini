@@ -2,30 +2,37 @@
 # Landscape Mini - Local Development & Debugging Makefile
 # =============================================================================
 #
-# Builds a minimal x86 UEFI image for the Landscape Router using debootstrap.
+# Builds a minimal x86 UEFI image for the Landscape Router.
+# Supports Debian (default) and Alpine Linux base systems.
 # The main build script (build.sh) requires root/sudo.
 #
 # Usage:
 #   make              - Show all available targets
-#   make build        - Full build (without Docker)
+#   make build        - Full build (Debian, without Docker)
+#   make build-alpine - Full build (Alpine, without Docker)
 #   make test         - Run automated health checks (non-interactive)
 #   make test-serial  - Boot image in QEMU (interactive serial console)
 #
 # Default credentials:  root / landscape  |  ld / landscape
 # =============================================================================
 
-.PHONY: help deps deps-test build build-docker test test-docker test-serial test-gui ssh clean distclean status
+.PHONY: help deps deps-test \
+	build build-docker build-alpine build-alpine-docker \
+	test test-docker test-alpine test-alpine-docker \
+	test-e2e test-e2e-alpine \
+	test-serial test-gui ssh clean distclean status
 
 # --------------------------------------------------------------------------
 # Configuration
 # --------------------------------------------------------------------------
 
-IMAGE       := output/landscape-mini-x86.img
-OVMF        := /usr/share/ovmf/OVMF.fd
-SSH_PORT    := 2222
-WEB_PORT    := 9800
-QEMU_MEM    := 1024
-QEMU_SMP    := 2
+IMAGE         := output/landscape-mini-x86.img
+IMAGE_ALPINE  := output/landscape-mini-x86-alpine.img
+OVMF          := /usr/share/ovmf/OVMF.fd
+SSH_PORT      := 2222
+WEB_PORT      := 9800
+QEMU_MEM      := 1024
+QEMU_SMP      := 2
 
 # --------------------------------------------------------------------------
 # Default target
@@ -37,11 +44,12 @@ help: ## Show all available targets with descriptions
 	@echo "======================================"
 	@echo ""
 	@grep -E '^[a-zA-Z_-]+:.*##' $(MAKEFILE_LIST) \
-		| awk 'BEGIN {FS = ":.*## "}; {printf "  \033[36m%-16s\033[0m %s\n", $$1, $$2}'
+		| awk 'BEGIN {FS = ":.*## "}; {printf "  \033[36m%-22s\033[0m %s\n", $$1, $$2}'
 	@echo ""
-	@echo "Image:   $(IMAGE)"
-	@echo "SSH:     ssh -p $(SSH_PORT) root@localhost"
-	@echo "Web UI:  http://localhost:$(WEB_PORT)"
+	@echo "Debian image: $(IMAGE)"
+	@echo "Alpine image: $(IMAGE_ALPINE)"
+	@echo "SSH:          ssh -p $(SSH_PORT) root@localhost"
+	@echo "Web UI:       http://localhost:$(WEB_PORT)"
 	@echo ""
 
 # --------------------------------------------------------------------------
@@ -59,26 +67,60 @@ deps-test: ## Install test dependencies (sshpass, socat, curl)
 	sudo apt-get install -y sshpass socat curl qemu-system-x86 ovmf
 
 # --------------------------------------------------------------------------
-# Build targets
+# Build targets — Debian
 # --------------------------------------------------------------------------
 
-build: ## Full build without Docker (requires sudo)
+build: ## Build Debian image without Docker (requires sudo)
 	sudo ./build.sh
 
-build-docker: ## Full build with Docker included (requires sudo)
+build-docker: ## Build Debian image with Docker (requires sudo)
 	sudo ./build.sh --with-docker
 
 # --------------------------------------------------------------------------
-# QEMU test targets
+# Build targets — Alpine
 # --------------------------------------------------------------------------
 
-test: $(IMAGE) ## Run automated health checks (non-interactive)
+build-alpine: ## Build Alpine image without Docker (requires sudo)
+	sudo ./build.sh --base alpine
+
+build-alpine-docker: ## Build Alpine image with Docker (requires sudo)
+	sudo ./build.sh --base alpine --with-docker
+
+# --------------------------------------------------------------------------
+# QEMU test targets — Debian
+# --------------------------------------------------------------------------
+
+test: $(IMAGE) ## Run health checks on Debian image
 	./tests/test-auto.sh $(IMAGE)
 
-test-docker: output/landscape-mini-x86-docker.img ## Run automated health checks on Docker image
+test-docker: output/landscape-mini-x86-docker.img ## Run health checks on Debian Docker image
 	./tests/test-auto.sh output/landscape-mini-x86-docker.img
 
-test-serial: $(IMAGE) ## Boot image in QEMU (interactive serial console)
+# --------------------------------------------------------------------------
+# QEMU test targets — Alpine
+# --------------------------------------------------------------------------
+
+test-alpine: $(IMAGE_ALPINE) ## Run health checks on Alpine image
+	./tests/test-auto.sh $(IMAGE_ALPINE)
+
+test-alpine-docker: output/landscape-mini-x86-alpine-docker.img ## Run health checks on Alpine Docker image
+	./tests/test-auto.sh output/landscape-mini-x86-alpine-docker.img
+
+# --------------------------------------------------------------------------
+# End-to-end network tests (Router VM + CirrOS client)
+# --------------------------------------------------------------------------
+
+test-e2e: $(IMAGE) ## Run E2E network tests on Debian image (DHCP, DNS, NAT)
+	./tests/test-e2e.sh $(IMAGE)
+
+test-e2e-alpine: $(IMAGE_ALPINE) ## Run E2E network tests on Alpine image (DHCP, DNS, NAT)
+	./tests/test-e2e.sh $(IMAGE_ALPINE)
+
+# --------------------------------------------------------------------------
+# Interactive QEMU targets
+# --------------------------------------------------------------------------
+
+test-serial: $(IMAGE) ## Boot Debian image in QEMU (interactive serial console)
 	qemu-system-x86_64 \
 		-enable-kvm \
 		-m $(QEMU_MEM) \
@@ -92,7 +134,7 @@ test-serial: $(IMAGE) ## Boot image in QEMU (interactive serial console)
 		-display none \
 		-serial mon:stdio
 
-test-gui: $(IMAGE) ## Boot image in QEMU (with VGA display window)
+test-gui: $(IMAGE) ## Boot Debian image in QEMU (with VGA display window)
 	qemu-system-x86_64 \
 		-enable-kvm \
 		-m $(QEMU_MEM) \

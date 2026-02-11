@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/bin/sh
 # Expand root partition to fill the entire disk
 # All operations are idempotent — exits in milliseconds if no expansion needed
 
