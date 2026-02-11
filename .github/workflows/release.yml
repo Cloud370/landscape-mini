@@ -97,23 +97,17 @@ jobs:
           path: artifacts/
           merge-multiple: true
 
-      - name: Compress and generate checksums
+      - name: Compress images
         run: |
           cd artifacts
           for f in *.img; do
             [ -f "$f" ] && gzip -k "$f"
           done
           rm -f *.img
-          sha256sum *.gz > SHA256SUMS
-          md5sum *.gz > MD5SUMS
-          cat SHA256SUMS
           ls -lh
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
-          files: |
-            artifacts/*.gz
-            artifacts/SHA256SUMS
-            artifacts/MD5SUMS
+          files: artifacts/*.gz
           generate_release_notes: true
