@@ -70,11 +70,10 @@ ROOTFS_DIR="${WORK_DIR}/rootfs"
 DOWNLOAD_DIR="${WORK_DIR}/downloads"
 LOOP_DEV=""
 
-# Docker suffix and image size adjustment
+# Docker suffix
 IMAGE_SUFFIX=""
 if [[ "${INCLUDE_DOCKER}" == "yes" ]]; then
     IMAGE_SUFFIX="-docker"
-    [[ "${IMAGE_SIZE_MB}" -lt 2048 ]] && IMAGE_SIZE_MB=2048
 fi
 
 IMAGE_FILE="${OUTPUT_DIR}/landscape-mini-x86${IMAGE_SUFFIX}.img"
@@ -187,15 +186,15 @@ phase_create_image() {
     echo "  Creating ${IMAGE_SIZE_MB}MB raw image ..."
     dd if=/dev/zero of="${IMAGE_FILE}" bs=1M count="${IMAGE_SIZE_MB}" status=progress
 
-    # Partition with GPT: BIOS boot (1-2MiB) + ESP (2-66MiB) + root (66MiB - 100%)
+    # Partition with GPT: BIOS boot (1-2MiB) + ESP (2-202MiB) + root (202MiB - 100%)
     echo "  Partitioning (GPT: BIOS + UEFI hybrid) ..."
     parted -s "${IMAGE_FILE}" \
         mklabel gpt \
         mkpart bios 1MiB 2MiB \
         set 1 bios_grub on \
-        mkpart ESP fat32 2MiB 66MiB \
+        mkpart ESP fat32 2MiB 202MiB \
         set 2 esp on \
-        mkpart root ext4 66MiB 100%
+        mkpart root ext4 202MiB 100%
 
     # Setup loop device
     echo "  Setting up loop device ..."
@@ -342,7 +341,9 @@ EOF
             ca-certificates \
             unzip \
             sudo \
-            openssh-server
+            openssh-server \
+            gdisk \
+            cloud-guest-utils
     "
 
     # ---- GRUB configuration ----
@@ -352,7 +353,8 @@ GRUB_DEFAULT=0
 GRUB_TIMEOUT=3
 GRUB_DISTRIBUTOR="Landscape"
 GRUB_CMDLINE_LINUX_DEFAULT="quiet console=tty0 console=ttyS0,115200n8"
-GRUB_CMDLINE_LINUX="net.ifnames=0 biosdevname=0"
+GRUB_CMDLINE_LINUX="net.ifnames=0 biosdevname=0 nomodeset"
+GRUB_TERMINAL=console
 EOF
 
     run_in_chroot "
@@ -487,6 +489,16 @@ EOF
     # Enable the service
     echo "  Enabling landscape-router.service ..."
     run_in_chroot "systemctl enable landscape-router.service"
+
+    # Install auto-expand root partition service
+    echo "  Installing expand-rootfs service ..."
+    mkdir -p "${ROOTFS_DIR}/usr/local/bin"
+    cp "${SCRIPT_DIR}/rootfs/usr/local/bin/expand-rootfs.sh" \
+        "${ROOTFS_DIR}/usr/local/bin/expand-rootfs.sh"
+    chmod +x "${ROOTFS_DIR}/usr/local/bin/expand-rootfs.sh"
+    cp "${SCRIPT_DIR}/rootfs/etc/systemd/system/expand-rootfs.service" \
+        "${ROOTFS_DIR}/etc/systemd/system/expand-rootfs.service"
+    run_in_chroot "systemctl enable expand-rootfs.service"
 
     echo "  Phase 5 complete."
 }
@@ -677,7 +689,7 @@ phase_cleanup_and_shrink() {
             grub-pc-bin grub-common grub2-common \
             initramfs-tools initramfs-tools-core initramfs-tools-bin \
             klibc-utils libklibc dracut-install cpio \
-            unzip e2fsprogs 2>/dev/null || true
+            unzip 2>/dev/null || true
         apt-get -y --purge autoremove 2>/dev/null || true
     "
 
@@ -744,8 +756,8 @@ phase_cleanup_and_shrink() {
     losetup -d "${LOOP_DEV}"
     LOOP_DEV=""
 
-    # Partition 3 starts at sector 135168 (66MiB = 69206016 bytes / 512)
-    local PART3_START_SECTOR=135168
+    # Partition 3 starts at sector 413696 (202MiB = 211812352 bytes / 512)
+    local PART3_START_SECTOR=413696
     # Calculate new partition end sector (aligned to 2048-sector / 1MiB boundary)
     local ROOT_SECTORS=$(( ROOT_BYTES / 512 ))
     # Align up to next 2048-sector boundary, then subtract 1 (sgdisk end is inclusive)
@@ -768,7 +780,7 @@ phase_cleanup_and_shrink() {
     sgdisk --zap-all "${IMAGE_FILE}" >/dev/null 2>&1
     sgdisk \
         -n 1:2048:4095 -t 1:EF02 -c 1:bios \
-        -n 2:4096:135167 -t 2:EF00 -c 2:ESP \
+        -n 2:4096:413695 -t 2:EF00 -c 2:ESP \
         -n 3:${PART3_START_SECTOR}:${PART3_END_SECTOR} -t 3:8300 \
         "${IMAGE_FILE}"
 

@@ -43,15 +43,30 @@ make test-serial
 
 ### 部署
 
-将 `output/landscape-mini-x86.img` 写入磁盘或导入虚拟化平台：
+#### 物理机 / U 盘
 
 ```bash
-# 写入物理磁盘
 dd if=output/landscape-mini-x86.img of=/dev/sdX bs=4M status=progress
-
-# 转换为 VMDK（VMware/Proxmox）
-qemu-img convert -f raw -O vmdk output/landscape-mini-x86.img landscape-mini.vmdk
 ```
+
+#### Proxmox VE (PVE)
+
+1. 上传镜像到 PVE 服务器
+2. 创建虚拟机（不添加磁盘）
+3. 导入磁盘：`qm importdisk <vmid> landscape-mini-x86.img local-lvm`
+4. 在 VM 硬件设置中挂载导入的磁盘
+5. 设置启动顺序，启动虚拟机
+
+#### 云服务器（dd 脚本）
+
+使用 [reinstall](https://github.com/bin456789/reinstall) 脚本将自定义镜像写入云服务器：
+
+```bash
+bash <(curl -sL https://raw.githubusercontent.com/bin456789/reinstall/main/reinstall.sh) \
+    dd --img='https://github.com/Cloud370/landscape-mini/releases/download/VERSION/landscape-mini-x86.img.gz'
+```
+
+> 根分区会在首次启动时自动扩展以填满整个磁盘，无需手动操作。
 
 ## 默认凭据
 
@@ -103,7 +118,7 @@ sudo ./build.sh --skip-to 5              # 从第 5 阶段恢复构建
 ```
 ┌──────────────┬────────────┬────────────┬──────────────────────────┐
 │ BIOS boot    │ EFI System │ Root (/)   │                          │
-│ 1 MiB        │ 64 MiB     │ 剩余空间    │  ← 构建后自动缩小        │
+│ 1 MiB        │ 200 MiB    │ 剩余空间    │  ← 构建后自动缩小        │
 │ (无文件系统)   │ FAT32      │ ext4       │                          │
 ├──────────────┼────────────┼────────────┤                          │
 │ GPT: EF02    │ GPT: EF00  │ GPT: 8300  │                          │

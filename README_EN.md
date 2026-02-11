@@ -43,15 +43,30 @@ make test-serial
 
 ### Deploy
 
-Write `output/landscape-mini-x86.img` to disk or import into a virtualization platform:
+#### Physical Disk / USB
 
 ```bash
-# Write to physical disk
 dd if=output/landscape-mini-x86.img of=/dev/sdX bs=4M status=progress
-
-# Convert to VMDK (VMware/Proxmox)
-qemu-img convert -f raw -O vmdk output/landscape-mini-x86.img landscape-mini.vmdk
 ```
+
+#### Proxmox VE (PVE)
+
+1. Upload image to PVE server
+2. Create a VM (without adding a disk)
+3. Import disk: `qm importdisk <vmid> landscape-mini-x86.img local-lvm`
+4. Attach the imported disk in VM hardware settings
+5. Set boot order and start the VM
+
+#### Cloud Server (dd script)
+
+Use the [reinstall](https://github.com/bin456789/reinstall) script to write custom images to cloud servers:
+
+```bash
+bash <(curl -sL https://raw.githubusercontent.com/bin456789/reinstall/main/reinstall.sh) \
+    dd --img='https://github.com/Cloud370/landscape-mini/releases/download/VERSION/landscape-mini-x86.img.gz'
+```
+
+> The root partition automatically expands to fill the entire disk on first boot — no manual action needed.
 
 ## Default Credentials
 
@@ -101,7 +116,7 @@ sudo ./build.sh --skip-to 5              # Resume from phase 5
 ```
 ┌──────────────┬────────────┬────────────┬──────────────────────────┐
 │ BIOS boot    │ EFI System │ Root (/)   │                          │
-│ 1 MiB        │ 64 MiB     │ Remaining  │  ← Auto-shrunk after    │
+│ 1 MiB        │ 200 MiB    │ Remaining  │  ← Auto-shrunk after    │
 │ (no fs)      │ FAT32      │ ext4       │    build                 │
 ├──────────────┼────────────┼────────────┤                          │
 │ GPT: EF02    │ GPT: EF00  │ GPT: 8300  │                          │

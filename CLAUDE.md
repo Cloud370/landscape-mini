@@ -68,8 +68,8 @@ The entire build is orchestrated by `build.sh`, a single bash script requiring r
 | Partition | Range | Type | Filesystem | Purpose |
 |-----------|-------|------|------------|---------|
 | 1 | 1-2 MiB | EF02 | none | BIOS boot (GRUB i386-pc) |
-| 2 | 2-66 MiB | EF00 | FAT32 | EFI System Partition |
-| 3 | 66 MiB+ | 8300 | ext4 (no journal) | Root filesystem |
+| 2 | 2-202 MiB | EF00 | FAT32 | EFI System Partition |
+| 3 | 202 MiB+ | 8300 | ext4 (no journal) | Root filesystem |
 
 ### CI/CD
 
