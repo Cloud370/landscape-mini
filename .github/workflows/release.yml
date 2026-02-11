@@ -87,6 +87,8 @@ jobs:
   release:
     needs: [build, test]
     runs-on: ubuntu-24.04
+    permissions:
+      contents: write
     steps:
       - name: Download all artifacts
         uses: actions/download-artifact@v4
