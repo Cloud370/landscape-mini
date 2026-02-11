@@ -63,7 +63,7 @@ dd if=output/landscape-mini-x86.img of=/dev/sdX bs=4M status=progress
 
 ```bash
 bash <(curl -sL https://raw.githubusercontent.com/bin456789/reinstall/main/reinstall.sh) \
-    dd --img='https://github.com/Cloud370/landscape-mini/releases/download/VERSION/landscape-mini-x86.img.gz'
+    dd --img='https://github.com/Cloud370/landscape-mini/releases/latest/download/landscape-mini-x86.img.gz'
 ```
 
 > 根分区会在首次启动时自动扩展以填满整个磁盘，无需手动操作。

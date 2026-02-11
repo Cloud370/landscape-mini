@@ -63,7 +63,7 @@ Use the [reinstall](https://github.com/bin456789/reinstall) script to write cust
 
 ```bash
 bash <(curl -sL https://raw.githubusercontent.com/bin456789/reinstall/main/reinstall.sh) \
-    dd --img='https://github.com/Cloud370/landscape-mini/releases/download/VERSION/landscape-mini-x86.img.gz'
+    dd --img='https://github.com/Cloud370/landscape-mini/releases/latest/download/landscape-mini-x86.img.gz'
 ```
 
 > The root partition automatically expands to fill the entire disk on first boot — no manual action needed.
