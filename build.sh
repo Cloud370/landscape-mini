@@ -320,7 +320,7 @@ EOF
 GRUB_DEFAULT=0
 GRUB_TIMEOUT=3
 GRUB_DISTRIBUTOR="Landscape"
-GRUB_CMDLINE_LINUX_DEFAULT="quiet"
+GRUB_CMDLINE_LINUX_DEFAULT="quiet console=tty0 console=ttyS0,115200n8"
 GRUB_CMDLINE_LINUX="net.ifnames=0 biosdevname=0"
 EOF
 
@@ -363,6 +363,13 @@ EOF
     # ---- Enable sshd ----
     echo "  Enabling sshd ..."
     run_in_chroot "systemctl enable ssh.service"
+
+    # ---- Allow root password login via SSH ----
+    echo "  Configuring SSH root login ..."
+    mkdir -p "${ROOTFS_DIR}/etc/ssh/sshd_config.d"
+    cat > "${ROOTFS_DIR}/etc/ssh/sshd_config.d/root-login.conf" <<'EOF'
+PermitRootLogin yes
+EOF
 
     # ---- Disable unnecessary network services ----
     echo "  Disabling conflicting network services ..."
@@ -631,9 +638,11 @@ phase_cleanup_and_shrink() {
     rm -rf "${ROOTFS_DIR}/usr/lib/udev/hwdb.d"
     run_in_chroot "systemd-hwdb update 2>/dev/null || true"
 
-    # ---- Remove SSH host keys (regenerated on first boot by sshd-keygen.service) ----
-    echo "  Removing SSH host keys (will regenerate on first boot) ..."
-    rm -f "${ROOTFS_DIR}"/etc/ssh/ssh_host_*
+    # ---- Generate SSH host keys ----
+    # Note: sshd-keygen.service (ConditionFirstBoot=yes) won't trigger because
+    # machine-id is already set during debootstrap, so generate keys at build time.
+    echo "  Generating SSH host keys ..."
+    run_in_chroot "ssh-keygen -A"
 
     # ---- General cleanup ----
     echo "  Cleaning caches and unnecessary files ..."
