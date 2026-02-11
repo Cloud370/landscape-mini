@@ -1,0 +1,97 @@
+name: CI
+
+on:
+  workflow_dispatch:
+    inputs:
+      landscape_version:
+        description: "Landscape version (latest or tag)"
+        default: "latest"
+  push:
+    branches:
+      - main
+    paths:
+      - build.sh
+      - build.env
+      - rootfs/**
+      - configs/**
+      - .github/workflows/**
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    strategy:
+      matrix:
+        include:
+          - variant: default
+            docker_flag: ""
+          - variant: docker
+            docker_flag: "--with-docker"
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Maximize build space
+        run: |
+          sudo rm -rf /usr/share/dotnet
+          sudo rm -rf /usr/local/lib/android
+          sudo rm -rf /opt/ghc
+          sudo rm -rf /usr/local/share/boost
+          sudo rm -rf "$AGENT_TOOLSDIRECTORY"
+          df -h
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y debootstrap parted dosfstools e2fsprogs grub-efi-amd64-bin grub-pc-bin rsync curl
+
+      - name: Build Image (${{ matrix.variant }})
+        run: |
+          VERSION="${{ github.event.inputs.landscape_version || 'latest' }}"
+          sudo APT_MIRROR="" OUTPUT_FORMAT=img COMPRESS_OUTPUT=no \
+            ./build.sh --version "$VERSION" ${{ matrix.docker_flag }}
+
+      - name: List outputs
+        run: ls -lh output/
+
+      - name: Upload image
+        uses: actions/upload-artifact@v4
+        with:
+          name: landscape-mini-x86-${{ matrix.variant }}
+          path: output/*.img
+          retention-days: 30
+
+  test:
+    needs: build
+    runs-on: ubuntu-24.04
+    strategy:
+      matrix:
+        include:
+          - variant: default
+          - variant: docker
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install test dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y sshpass socat curl qemu-system-x86 ovmf
+
+      - name: Download image
+        uses: actions/download-artifact@v4
+        with:
+          name: landscape-mini-x86-${{ matrix.variant }}
+          path: output/
+
+      - name: Run health checks (${{ matrix.variant }})
+        run: |
+          ls -lh output/
+          ./tests/test-auto.sh output/*.img
+
+      - name: Upload test logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-logs-${{ matrix.variant }}
+          path: output/test-logs/
+          retention-days: 7

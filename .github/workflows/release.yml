@@ -1,26 +1,9 @@
-name: Build Minimal x86 Image
+name: Release
 
 on:
-  workflow_dispatch:
-    inputs:
-      landscape_version:
-        description: "Landscape version (latest or tag)"
-        default: "latest"
   push:
-    branches:
-      - main
     tags:
       - 'v*'
-    paths:
-      - build.sh
-      - build.env
-      - rootfs/**
-      - configs/**
-      - .github/workflows/**
-
-concurrency:
-  group: build-${{ github.sha }}
-  cancel-in-progress: true
 
 jobs:
   build:
@@ -52,9 +35,8 @@ jobs:
 
       - name: Build Image (${{ matrix.variant }})
         run: |
-          VERSION="${{ github.event.inputs.landscape_version || 'latest' }}"
           sudo APT_MIRROR="" OUTPUT_FORMAT=img COMPRESS_OUTPUT=no \
-            ./build.sh --version "$VERSION" ${{ matrix.docker_flag }}
+            ./build.sh ${{ matrix.docker_flag }}
 
       - name: List outputs
         run: ls -lh output/
@@ -64,7 +46,7 @@ jobs:
         with:
           name: landscape-mini-x86-${{ matrix.variant }}
           path: output/*.img
-          retention-days: 30
+          retention-days: 5
 
   test:
     needs: build
@@ -103,9 +85,8 @@ jobs:
           retention-days: 7
 
   release:
-    needs: build
+    needs: [build, test]
     runs-on: ubuntu-24.04
-    if: startsWith(github.ref, 'refs/tags/v')
     steps:
       - name: Download all artifacts
         uses: actions/download-artifact@v4
@@ -120,9 +101,7 @@ jobs:
           for f in *.img; do
             [ -f "$f" ] && gzip -k "$f"
           done
-          # Remove raw images, keep only .gz for release
           rm -f *.img
-          # Generate checksums
           sha256sum *.gz > SHA256SUMS
           md5sum *.gz > MD5SUMS
           cat SHA256SUMS
