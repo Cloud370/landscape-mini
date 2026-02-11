@@ -48,21 +48,41 @@ jobs:
             DOCKER_FLAG="--with-docker"
           fi
           VERSION="${{ github.event.inputs.landscape_version || 'latest' }}"
-          sudo ./build.sh --version "$VERSION" $DOCKER_FLAG
+          sudo APT_MIRROR="" ./build.sh --version "$VERSION" $DOCKER_FLAG
 
-      - name: Prepare Artifacts
-        run: |
-          mkdir -p artifacts
-          cp output/*.img artifacts/ 2>/dev/null || true
-          cp output/*.vmdk artifacts/ 2>/dev/null || true
-          cp output/*.gz artifacts/ 2>/dev/null || true
-          ls -lh artifacts/
+      - name: List outputs
+        run: ls -lh output/
 
-      - name: Upload Artifacts
+      - name: Upload raw image
+        if: hashFiles('output/*.img') != ''
         uses: actions/upload-artifact@v4
         with:
-          name: landscape-mini-x86
-          path: artifacts/
+          name: landscape-mini-x86-img
+          path: output/*.img
+          retention-days: 30
+
+      - name: Upload compressed raw image
+        if: hashFiles('output/*.img.gz') != ''
+        uses: actions/upload-artifact@v4
+        with:
+          name: landscape-mini-x86-img-gz
+          path: output/*.img.gz
+          retention-days: 30
+
+      - name: Upload VMDK image
+        if: hashFiles('output/*.vmdk') != ''
+        uses: actions/upload-artifact@v4
+        with:
+          name: landscape-mini-x86-vmdk
+          path: output/*.vmdk
+          retention-days: 30
+
+      - name: Upload compressed VMDK image
+        if: hashFiles('output/*.vmdk.gz') != ''
+        uses: actions/upload-artifact@v4
+        with:
+          name: landscape-mini-x86-vmdk-gz
+          path: output/*.vmdk.gz
           retention-days: 30
 
   release:
@@ -70,11 +90,12 @@ jobs:
     runs-on: ubuntu-24.04
     if: startsWith(github.ref, 'refs/tags/v')
     steps:
-      - name: Download artifacts
+      - name: Download all artifacts
         uses: actions/download-artifact@v4
         with:
-          name: landscape-mini-x86
+          pattern: landscape-mini-x86-*
           path: artifacts/
+          merge-multiple: true
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
