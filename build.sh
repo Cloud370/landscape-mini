@@ -288,6 +288,39 @@ UUID=${ROOT_UUID}   /           ext4    errors=remount-ro   0       1
 UUID=${EFI_UUID}    /boot/efi   vfat    umask=0077          0       2
 EOF
 
+    # ---- Prevent docs/locale from ever being installed ----
+    echo "  Configuring dpkg path exclusions ..."
+    mkdir -p "${ROOTFS_DIR}/etc/dpkg/dpkg.cfg.d"
+    cat > "${ROOTFS_DIR}/etc/dpkg/dpkg.cfg.d/01-nodoc" <<'EOF'
+path-exclude /usr/share/doc/*
+path-exclude /usr/share/man/*
+path-exclude /usr/share/info/*
+path-exclude /usr/share/lintian/*
+path-exclude /usr/share/locale/*
+path-include /usr/share/locale/en*
+EOF
+
+    # ---- Set initramfs to dep mode with explicit boot modules ----
+    echo "  Configuring initramfs MODULES=dep ..."
+    mkdir -p "${ROOTFS_DIR}/etc/initramfs-tools/conf.d"
+    echo "MODULES=dep" > "${ROOTFS_DIR}/etc/initramfs-tools/conf.d/modules-dep"
+    # Force-include essential boot modules (chroot can't detect target hardware)
+    cat > "${ROOTFS_DIR}/etc/initramfs-tools/modules" <<'EOF'
+# Storage drivers (virtio for QEMU/KVM, ahci/ata for bare metal)
+ext4
+virtio_pci
+virtio_blk
+virtio_scsi
+sd_mod
+ahci
+ata_piix
+ata_generic
+# EFI partition
+vfat
+nls_cp437
+nls_ascii
+EOF
+
     # ---- Install packages ----
     echo "  Installing packages (this may take a while) ..."
     run_in_chroot "
@@ -308,10 +341,8 @@ EOF
             curl \
             ca-certificates \
             unzip \
-            dnsutils \
             sudo \
-            openssh-server \
-            locales
+            openssh-server
     "
 
     # ---- GRUB configuration ----
@@ -341,13 +372,9 @@ EOF
     echo "  Setting timezone to ${TIMEZONE} ..."
     run_in_chroot "ln -sf /usr/share/zoneinfo/${TIMEZONE} /etc/localtime"
 
-    # ---- Locale ----
+    # ---- Locale (without locales package) ----
     echo "  Configuring locale (${LOCALE}) ..."
-    sed -i "s/^# ${LOCALE}/${LOCALE}/" "${ROOTFS_DIR}/etc/locale.gen"
-    run_in_chroot "
-        locale-gen
-        update-locale LANG=${LOCALE}
-    "
+    echo "LANG=${LOCALE}" > "${ROOTFS_DIR}/etc/default/locale"
 
     # ---- Root password ----
     echo "  Setting root password ..."
@@ -552,34 +579,32 @@ phase_cleanup_and_shrink() {
     run_in_chroot "
         KDIR=\$(ls -d /usr/lib/modules/*/kernel 2>/dev/null | head -1)
         if [ -n \"\$KDIR\" ]; then
-            # Remove sound subsystem (8.2M)
+            # === Top-level subsystems ===
             rm -rf \"\$KDIR/sound\"
-            # Remove media (TV tuners, webcams: 11M)
-            rm -rf \"\$KDIR/drivers/media\"
-            # Remove GPU/DRM (9.6M)
-            rm -rf \"\$KDIR/drivers/gpu\"
-            # Remove InfiniBand (2.6M)
-            rm -rf \"\$KDIR/drivers/infiniband\"
-            # Remove IIO industrial sensors (2.9M)
-            rm -rf \"\$KDIR/drivers/iio\"
-            # Remove comedi DAQ (892K)
-            rm -rf \"\$KDIR/drivers/comedi\"
-            # Remove staging drivers (832K)
-            rm -rf \"\$KDIR/drivers/staging\"
-            # Remove HID (1.5M)
-            rm -rf \"\$KDIR/drivers/hid\"
-            # Remove input devices (1.2M)
-            rm -rf \"\$KDIR/drivers/input\"
-            # Remove video/fbdev (724K)
-            rm -rf \"\$KDIR/drivers/video\"
-            # Remove wireless drivers (8.8M) - not needed for wired router
-            rm -rf \"\$KDIR/drivers/net/wireless\"
-            # Remove Bluetooth (412K)
-            rm -rf \"\$KDIR/drivers/bluetooth\"
-            # Remove unused filesystems (keep ext4, vfat, fuse, overlay, nfs)
-            for fs in bcachefs btrfs xfs ocfs2 f2fs jfs reiserfs gfs2 nilfs2 orangefs coda; do
-                rm -rf \"\$KDIR/fs/\$fs\"
+
+            # === drivers/ — bulk removal ===
+            for d in media gpu infiniband iio comedi staging hid input video \
+                     bluetooth scsi usb platform md hwmon mtd misc target \
+                     accel mmc watchdog isdn edac char i2c crypto nvme; do
+                rm -rf \"\$KDIR/drivers/\$d\"
             done
+
+            # === drivers/net/ — keep ethernet, phy, bonding, ppp, vxlan, wireguard, hyperv ===
+            for d in usb can wwan arcnet fddi hamradio ieee802154 wan wireless; do
+                rm -rf \"\$KDIR/drivers/net/\$d\"
+            done
+
+            # === net/ — remove unused network stacks ===
+            for d in bluetooth mac80211 wireless sunrpc ceph tipc nfc rxrpc smc sctp; do
+                rm -rf \"\$KDIR/net/\$d\"
+            done
+
+            # === fs/ — keep ext4, fat, fuse, overlay, nls (needed by vfat) ===
+            for d in bcachefs btrfs xfs ocfs2 f2fs jfs reiserfs gfs2 nilfs2 orangefs coda \
+                     smb nfs nfsd ceph ubifs afs ntfs3 dlm jffs2 udf netfs; do
+                rm -rf \"\$KDIR/fs/\$d\"
+            done
+
             # Rebuild module dependencies
             KVER=\$(ls /usr/lib/modules/ | head -1)
             depmod \"\$KVER\" 2>/dev/null || true
@@ -594,9 +619,8 @@ phase_cleanup_and_shrink() {
     "
 
     # ---- Clean up GRUB leftovers ----
-    echo "  Cleaning GRUB locale and fonts ..."
+    echo "  Cleaning GRUB locale and modules ..."
     rm -rf "${ROOTFS_DIR}/boot/grub/locale"
-    rm -rf "${ROOTFS_DIR}/boot/grub/fonts"
     # Remove GRUB modules source (not needed at runtime, EFI already installed)
     rm -rf "${ROOTFS_DIR}/usr/lib/grub"
 
@@ -633,16 +657,37 @@ phase_cleanup_and_shrink() {
         fi
     "
 
-    # ---- Trim udev hwdb ----
-    echo "  Trimming udev hardware database ..."
+    # ---- Truncate udev hwdb (saves ~13M) ----
+    echo "  Truncating udev hardware database ..."
     rm -rf "${ROOTFS_DIR}/usr/lib/udev/hwdb.d"
-    run_in_chroot "systemd-hwdb update 2>/dev/null || true"
+    : > "${ROOTFS_DIR}/usr/lib/udev/hwdb.bin"
 
     # ---- Generate SSH host keys ----
     # Note: sshd-keygen.service (ConditionFirstBoot=yes) won't trigger because
     # machine-id is already set during debootstrap, so generate keys at build time.
     echo "  Generating SSH host keys ..."
     run_in_chroot "ssh-keygen -A"
+
+    # ---- Purge build-only packages (saves ~10-15M) ----
+    echo "  Purging build-only packages ..."
+    run_in_chroot "
+        export DEBIAN_FRONTEND=noninteractive
+        dpkg --purge --force-depends \
+            grub-efi-amd64 grub-efi-amd64-bin grub-efi-amd64-unsigned \
+            grub-pc-bin grub-common grub2-common \
+            initramfs-tools initramfs-tools-core initramfs-tools-bin \
+            klibc-utils libklibc dracut-install cpio \
+            unzip e2fsprogs 2>/dev/null || true
+        apt-get -y --purge autoremove 2>/dev/null || true
+    "
+
+    # ---- Strip all binaries and shared libraries (saves ~3-5M) ----
+    echo "  Stripping binaries and shared libraries ..."
+    run_in_chroot "
+        find /usr/bin /usr/sbin /usr/lib -type f \
+            \( -name '*.so*' -o -executable \) \
+            -exec strip --strip-unneeded {} + 2>/dev/null || true
+    "
 
     # ---- General cleanup ----
     echo "  Cleaning caches and unnecessary files ..."
@@ -657,7 +702,6 @@ phase_cleanup_and_shrink() {
         rm -rf /usr/share/common-licenses/*
         rm -rf /usr/share/perl5/*
         rm -f /var/log/*.log
-        rm -rf /var/log/journal/*
         rm -rf /tmp/*
         rm -rf /var/tmp/*
     "
@@ -672,6 +716,10 @@ phase_cleanup_and_shrink() {
     # Unmount EFI partition
     echo "  Unmounting EFI partition ..."
     umount "${ROOTFS_DIR}/boot/efi" 2>/dev/null || true
+
+    # ---- Clean journal AFTER special fs unmounted (prevents recreation) ----
+    echo "  Cleaning journal logs ..."
+    rm -rf "${ROOTFS_DIR}/var/log/journal"
 
     # Unmount root BEFORE e2fsck/resize2fs (cannot operate on mounted fs)
     echo "  Unmounting root filesystem ..."
