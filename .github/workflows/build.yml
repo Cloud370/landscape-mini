@@ -6,10 +6,6 @@ on:
       landscape_version:
         description: "Landscape version (latest or tag)"
         default: "latest"
-      include_docker:
-        description: "Include Docker"
-        type: boolean
-        default: false
   push:
     branches:
       - main
@@ -23,6 +19,13 @@ on:
 jobs:
   build:
     runs-on: ubuntu-24.04
+    strategy:
+      matrix:
+        include:
+          - variant: default
+            docker_flag: ""
+          - variant: docker
+            docker_flag: "--with-docker"
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -39,34 +42,22 @@ jobs:
       - name: Install dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y debootstrap qemu-utils parted dosfstools e2fsprogs grub-efi-amd64-bin grub-pc-bin rsync curl
+          sudo apt-get install -y debootstrap parted dosfstools e2fsprogs grub-efi-amd64-bin grub-pc-bin rsync curl
 
-      - name: Build Image
+      - name: Build Image (${{ matrix.variant }})
         run: |
-          DOCKER_FLAG=""
-          if [ "${{ github.event.inputs.include_docker }}" = "true" ]; then
-            DOCKER_FLAG="--with-docker"
-          fi
           VERSION="${{ github.event.inputs.landscape_version || 'latest' }}"
-          sudo APT_MIRROR="" ./build.sh --version "$VERSION" $DOCKER_FLAG
+          sudo APT_MIRROR="" OUTPUT_FORMAT=img COMPRESS_OUTPUT=no \
+            ./build.sh --version "$VERSION" ${{ matrix.docker_flag }}
 
       - name: List outputs
         run: ls -lh output/
 
-      - name: Upload raw image
-        if: hashFiles('output/*.img') != ''
+      - name: Upload image
         uses: actions/upload-artifact@v4
         with:
-          name: landscape-mini-x86-img
+          name: landscape-mini-x86-${{ matrix.variant }}
           path: output/*.img
-          retention-days: 30
-
-      - name: Upload VMDK image
-        if: hashFiles('output/*.vmdk') != ''
-        uses: actions/upload-artifact@v4
-        with:
-          name: landscape-mini-x86-vmdk
-          path: output/*.vmdk
           retention-days: 30
 
   release:
@@ -81,12 +72,18 @@ jobs:
           path: artifacts/
           merge-multiple: true
 
-      - name: Compress for release
+      - name: Compress and generate checksums
         run: |
           cd artifacts
-          for f in *.img *.vmdk; do
+          for f in *.img; do
             [ -f "$f" ] && gzip -k "$f"
           done
+          # Remove raw images, keep only .gz for release
+          rm -f *.img
+          # Generate checksums
+          sha256sum *.gz > SHA256SUMS
+          md5sum *.gz > MD5SUMS
+          cat SHA256SUMS
           ls -lh
 
       - name: Create GitHub Release
@@ -94,4 +91,6 @@ jobs:
         with:
           files: |
             artifacts/*.gz
+            artifacts/SHA256SUMS
+            artifacts/MD5SUMS
           generate_release_notes: true

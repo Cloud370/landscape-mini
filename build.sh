@@ -68,9 +68,16 @@ WORK_DIR="$(pwd)/work"
 OUTPUT_DIR="$(pwd)/output"
 ROOTFS_DIR="${WORK_DIR}/rootfs"
 DOWNLOAD_DIR="${WORK_DIR}/downloads"
-IMAGE_FILE="${OUTPUT_DIR}/landscape-mini-x86.img"
-
 LOOP_DEV=""
+
+# Docker suffix and image size adjustment
+IMAGE_SUFFIX=""
+if [[ "${INCLUDE_DOCKER}" == "yes" ]]; then
+    IMAGE_SUFFIX="-docker"
+    [[ "${IMAGE_SIZE_MB}" -lt 2048 ]] && IMAGE_SIZE_MB=2048
+fi
+
+IMAGE_FILE="${OUTPUT_DIR}/landscape-mini-x86${IMAGE_SUFFIX}.img"
 
 # Determine download base URL
 if [ "${LANDSCAPE_VERSION}" == "latest" ]; then
@@ -291,6 +298,8 @@ EOF
             grub-efi-amd64 \
             grub-pc-bin \
             initramfs-tools \
+            e2fsprogs \
+            zstd \
             iproute2 \
             iptables \
             bpftool \
@@ -587,6 +596,7 @@ phase_cleanup_and_shrink() {
     # ---- Aggressive locale/i18n cleanup ----
     echo "  Cleaning locale and i18n data ..."
     run_in_chroot "
+        export DEBIAN_FRONTEND=noninteractive
         # Remove libc-l10n translations (4.7M)
         apt-get purge -y --auto-remove libc-l10n 2>/dev/null || true
 
@@ -620,6 +630,10 @@ phase_cleanup_and_shrink() {
     echo "  Trimming udev hardware database ..."
     rm -rf "${ROOTFS_DIR}/usr/lib/udev/hwdb.d"
     run_in_chroot "systemd-hwdb update 2>/dev/null || true"
+
+    # ---- Remove SSH host keys (regenerated on first boot by sshd-keygen.service) ----
+    echo "  Removing SSH host keys (will regenerate on first boot) ..."
+    rm -f "${ROOTFS_DIR}"/etc/ssh/ssh_host_*
 
     # ---- General cleanup ----
     echo "  Cleaning caches and unnecessary files ..."
@@ -675,30 +689,41 @@ phase_cleanup_and_shrink() {
 
     # Partition 3 starts at sector 135168 (66MiB = 69206016 bytes / 512)
     local PART3_START_SECTOR=135168
-    # Calculate new partition end sector (align to 2048-sector / 1MiB boundary)
+    # Calculate new partition end sector (aligned to 2048-sector / 1MiB boundary)
     local ROOT_SECTORS=$(( ROOT_BYTES / 512 ))
+    # Align up to next 2048-sector boundary, then subtract 1 (sgdisk end is inclusive)
     local PART3_END_SECTOR=$(( PART3_START_SECTOR + ROOT_SECTORS ))
-    PART3_END_SECTOR=$(( ((PART3_END_SECTOR + 2047) / 2048) * 2048 ))
-    # Total image: partition end + 2048 sectors (1MiB) for GPT backup header
-    local TOTAL_SECTORS=$(( PART3_END_SECTOR + 2048 ))
+    PART3_END_SECTOR=$(( ((PART3_END_SECTOR + 2047) / 2048) * 2048 - 1 ))
+    # Total image: sector after partition end + 2048 sectors (1MiB) for GPT backup header
+    local TOTAL_SECTORS=$(( PART3_END_SECTOR + 1 + 2048 ))
     local TOTAL_BYTES=$(( TOTAL_SECTORS * 512 ))
 
-    # Resize partition 3 in GPT to match the shrunk filesystem
-    echo "  Resizing partition 3 in GPT ..."
-    sgdisk -d 3 -n 3:${PART3_START_SECTOR}:${PART3_END_SECTOR} -t 3:8300 "${IMAGE_FILE}"
+    # Save GRUB i386-pc boot code from MBR (first 440 bytes)
+    echo "  Saving GRUB MBR boot code ..."
+    dd if="${IMAGE_FILE}" of="${IMAGE_FILE}.mbr" bs=440 count=1 2>/dev/null
 
     # Truncate the image to the new size
     echo "  Truncating image to $(( TOTAL_BYTES / 1048576 )) MB ..."
     truncate -s "${TOTAL_BYTES}" "${IMAGE_FILE}"
 
-    # Move GPT backup header to the new end of disk
-    echo "  Fixing GPT backup header ..."
-    sgdisk -e "${IMAGE_FILE}"
+    # Wipe all GPT/MBR structures, then recreate clean GPT
+    echo "  Rebuilding GPT partition table ..."
+    sgdisk --zap-all "${IMAGE_FILE}" >/dev/null 2>&1
+    sgdisk \
+        -n 1:2048:4095 -t 1:EF02 -c 1:bios \
+        -n 2:4096:135167 -t 2:EF00 -c 2:ESP \
+        -n 3:${PART3_START_SECTOR}:${PART3_END_SECTOR} -t 3:8300 \
+        "${IMAGE_FILE}"
+
+    # Restore GRUB i386-pc boot code to MBR
+    echo "  Restoring GRUB MBR boot code ..."
+    dd if="${IMAGE_FILE}.mbr" of="${IMAGE_FILE}" bs=440 count=1 conv=notrunc 2>/dev/null
+    rm -f "${IMAGE_FILE}.mbr"
 
     # Optional: convert to VMDK
     if [[ "${OUTPUT_FORMAT}" == "vmdk" || "${OUTPUT_FORMAT}" == "both" ]]; then
         echo "  Converting to VMDK ..."
-        local VMDK_FILE="${OUTPUT_DIR}/landscape-mini-x86.vmdk"
+        local VMDK_FILE="${OUTPUT_DIR}/landscape-mini-x86${IMAGE_SUFFIX}.vmdk"
         qemu-img convert -f raw -O vmdk "${IMAGE_FILE}" "${VMDK_FILE}"
         echo "  VMDK created: ${VMDK_FILE}"
     fi
@@ -710,7 +735,7 @@ phase_cleanup_and_shrink() {
         echo "  Compressed: ${IMAGE_FILE}.gz"
 
         if [[ "${OUTPUT_FORMAT}" == "vmdk" || "${OUTPUT_FORMAT}" == "both" ]]; then
-            local VMDK_FILE="${OUTPUT_DIR}/landscape-mini-x86.vmdk"
+            local VMDK_FILE="${OUTPUT_DIR}/landscape-mini-x86${IMAGE_SUFFIX}.vmdk"
             if [[ -f "${VMDK_FILE}" ]]; then
                 gzip -k -f "${VMDK_FILE}"
                 echo "  Compressed: ${VMDK_FILE}.gz"
@@ -749,7 +774,7 @@ phase_report() {
         echo "  Compressed: ${IMAGE_FILE}.gz (${GZ_SIZE})"
     fi
 
-    local VMDK_FILE="${OUTPUT_DIR}/landscape-mini-x86.vmdk"
+    local VMDK_FILE="${OUTPUT_DIR}/landscape-mini-x86${IMAGE_SUFFIX}.vmdk"
     if [[ -f "${VMDK_FILE}" ]]; then
         local VMDK_SIZE
         VMDK_SIZE=$(du -h "${VMDK_FILE}" | awk '{print $1}')
