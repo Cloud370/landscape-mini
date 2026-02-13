@@ -111,6 +111,7 @@ nls_ascii
 # VMware / ESXi storage drivers
 vmw_pvscsi
 mptspi
+mpt3sas
 # NVMe storage
 nvme
 # Hyper-V (Azure)
@@ -160,7 +161,7 @@ EOF
 GRUB_DEFAULT=0
 GRUB_TIMEOUT=3
 GRUB_DISTRIBUTOR="Landscape"
-GRUB_CMDLINE_LINUX_DEFAULT="quiet console=tty0 console=ttyS0,115200n8"
+GRUB_CMDLINE_LINUX_DEFAULT="quiet console=ttyS0,115200n8 console=tty0"
 GRUB_CMDLINE_LINUX="net.ifnames=0 biosdevname=0 nomodeset"
 GRUB_TERMINAL=console
 EOF

@@ -249,7 +249,7 @@ phase_cleanup_and_shrink() {
             for d in media gpu infiniband iio comedi staging hid input video \
                      bluetooth usb platform md mtd misc target \
                      accel mmc isdn edac crypto \
-                     nfc firewire thunderbolt ufs atm vfio message \
+                     nfc firewire thunderbolt ufs atm vfio \
                      leds vdpa ntb dma accessibility gpio pinctrl pcmcia \
                      spi memstick power soundwire ssb parport uio \
                      nvdimm rpmsg bcma auxdisplay cdrom mfd gnss dca mux \

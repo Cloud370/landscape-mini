@@ -155,8 +155,24 @@ EOF
 
     # ---- Configure mkinitfs features and rebuild initramfs ----
     echo "  Configuring mkinitfs ..."
+
+    # Create custom feature for hypervisor storage drivers not covered by
+    # the standard "scsi" feature (which only includes sd_mod/scsi_mod).
+    mkdir -p "${ROOTFS_DIR}/etc/mkinitfs/features.d"
+    cat > "${ROOTFS_DIR}/etc/mkinitfs/features.d/hypervisors.modules" <<'EOF'
+# VMware / ESXi storage (PVSCSI + LSI Logic Parallel + LSI Logic SAS)
+kernel/drivers/scsi/vmw_pvscsi.ko*
+kernel/drivers/message/fusion/mptspi.ko*
+kernel/drivers/message/fusion/mptbase.ko*
+kernel/drivers/message/fusion/mptscsih.ko*
+kernel/drivers/scsi/mpt3sas/mpt3sas.ko*
+# Hyper-V / Azure storage
+kernel/drivers/hv/hv_vmbus.ko*
+kernel/drivers/scsi/hv_storvsc.ko*
+EOF
+
     cat > "${ROOTFS_DIR}/etc/mkinitfs/mkinitfs.conf" <<'EOF'
-features="ata base ext4 nvme scsi virtio xen"
+features="ata base ext4 hypervisors nvme scsi virtio xen"
 EOF
 
     echo "  Building initramfs ..."
@@ -175,7 +191,7 @@ EOF
 GRUB_DEFAULT=0
 GRUB_TIMEOUT=3
 GRUB_DISTRIBUTOR="Landscape"
-GRUB_CMDLINE_LINUX_DEFAULT="quiet console=tty0 console=ttyS0,115200n8"
+GRUB_CMDLINE_LINUX_DEFAULT="quiet console=ttyS0,115200n8 console=tty0"
 GRUB_CMDLINE_LINUX="rootfstype=ext4 modules=ext4 net.ifnames=0 biosdevname=0 nomodeset"
 GRUB_TERMINAL=console
 EOF
