@@ -92,6 +92,7 @@ The 8 sequential phases:
 - `configs/landscape_init.toml` — Optional router init config (WAN/LAN interfaces, DHCP, NAT rules)
 - `tests/test-auto.sh` — Automated test runner (QEMU lifecycle, SSH health checks, supports both systemd and OpenRC)
 - `tests/test-e2e.sh` — End-to-end network test (2-VM: Router + CirrOS client, tests DHCP/DNS/NAT)
+- `CHANGELOG.md` — Bilingual (EN/CN) changelog following Keep a Changelog format / 双语变更日志
 - `.github/workflows/ci.yml` — CI pipeline: 4-variant parallel build+test (health checks + E2E)
 - `.github/workflows/release.yml` — Release pipeline: build+test → compress → GitHub Release
 - `.github/workflows/test.yml` — Standalone test workflow (manual trigger, downloads artifacts)
