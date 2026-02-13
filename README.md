@@ -79,6 +79,29 @@ bash <(curl -sL https://raw.githubusercontent.com/bin456789/reinstall/main/reins
 
 > 根分区会在首次启动时自动扩展以填满整个磁盘，无需手动操作。
 
+## 换源（国内镜像）
+
+部署后如需将软件源切换到国内镜像以加速 `apt` / `apk` 操作，镜像内置了 `setup-mirror.sh` 工具：
+
+```bash
+# 查看当前源配置
+setup-mirror.sh show
+
+# 一键切换到国内镜像
+setup-mirror.sh tuna       # 清华 TUNA
+setup-mirror.sh aliyun     # 阿里云
+setup-mirror.sh ustc       # 中科大
+setup-mirror.sh huawei     # 华为云
+
+# 恢复官方源
+setup-mirror.sh reset
+
+# 交互式选择
+setup-mirror.sh
+```
+
+自动检测 Debian / Alpine 系统，切换后自动执行 `apt update` 或 `apk update`。
+
 ## 默认凭据
 
 | 用户 | 密码 |
@@ -188,6 +211,9 @@ Router VM (eth0=WAN/SLIRP, eth1=LAN/mcast) ←→ Client VM (CirrOS, eth0=mcast)
 ├── configs/
 │   └── landscape_init.toml  # 路由器初始配置（WAN/LAN/DHCP/NAT）
 ├── rootfs/               # 写入镜像的配置文件
+│   ├── usr/local/bin/
+│   │   ├── expand-rootfs.sh         # 首次启动自动扩展根分区
+│   │   └── setup-mirror.sh          # 换源工具（国内镜像）
 │   └── etc/
 │       ├── network/interfaces
 │       ├── sysctl.d/99-landscape.conf

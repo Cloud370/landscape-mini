@@ -204,6 +204,12 @@ phase_install_landscape() {
         "${ROOTFS_DIR}/usr/local/bin/expand-rootfs.sh"
     chmod +x "${ROOTFS_DIR}/usr/local/bin/expand-rootfs.sh"
 
+    # Install mirror setup script
+    echo "  Installing setup-mirror script ..."
+    cp "${SCRIPT_DIR}/rootfs/usr/local/bin/setup-mirror.sh" \
+        "${ROOTFS_DIR}/usr/local/bin/setup-mirror.sh"
+    chmod +x "${ROOTFS_DIR}/usr/local/bin/setup-mirror.sh"
+
     # Backend-specific: install init services (systemd or OpenRC)
     backend_install_landscape_services
 

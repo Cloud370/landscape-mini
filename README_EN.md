@@ -79,6 +79,29 @@ bash <(curl -sL https://raw.githubusercontent.com/bin456789/reinstall/main/reins
 
 > The root partition automatically expands to fill the entire disk on first boot — no manual action needed.
 
+## Mirror Setup (China)
+
+To switch package mirrors to Chinese mirrors after deployment for faster `apt` / `apk` operations, use the built-in `setup-mirror.sh` tool:
+
+```bash
+# Show current mirror config
+setup-mirror.sh show
+
+# Switch to a Chinese mirror
+setup-mirror.sh tuna       # Tsinghua TUNA
+setup-mirror.sh aliyun     # Alibaba Cloud
+setup-mirror.sh ustc       # USTC
+setup-mirror.sh huawei     # Huawei Cloud
+
+# Restore official mirrors
+setup-mirror.sh reset
+
+# Interactive selection
+setup-mirror.sh
+```
+
+Auto-detects Debian / Alpine and runs `apt update` or `apk update` after switching.
+
 ## Default Credentials
 
 | User | Password |
@@ -188,6 +211,9 @@ Logs saved to `output/test-logs/`.
 ├── configs/
 │   └── landscape_init.toml  # Router init config (WAN/LAN/DHCP/NAT)
 ├── rootfs/               # Files copied into image
+│   ├── usr/local/bin/
+│   │   ├── expand-rootfs.sh         # Auto-expand root partition on first boot
+│   │   └── setup-mirror.sh          # Mirror setup tool (Chinese mirrors)
 │   └── etc/
 │       ├── network/interfaces
 │       ├── sysctl.d/99-landscape.conf
