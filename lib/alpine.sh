@@ -148,13 +148,15 @@ EOF
             losetup \
             findutils \
             dosfstools \
-            util-linux
+            util-linux \
+            nano \
+            iperf3
     "
 
     # ---- Configure mkinitfs features and rebuild initramfs ----
     echo "  Configuring mkinitfs ..."
     cat > "${ROOTFS_DIR}/etc/mkinitfs/mkinitfs.conf" <<'EOF'
-features="ata base ext4 virtio"
+features="ata base ext4 nvme scsi virtio xen"
 EOF
 
     echo "  Building initramfs ..."

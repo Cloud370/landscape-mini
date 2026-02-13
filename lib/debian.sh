@@ -108,6 +108,16 @@ ata_generic
 vfat
 nls_cp437
 nls_ascii
+# VMware / ESXi storage drivers
+vmw_pvscsi
+mptspi
+# NVMe storage
+nvme
+# Hyper-V (Azure)
+hv_vmbus
+hv_storvsc
+# Xen (AWS, Oracle Cloud)
+xen_blkfront
 EOF
 
     # ---- Install packages ----
@@ -136,7 +146,12 @@ EOF
             cloud-guest-utils \
             iputils-ping \
             traceroute \
-            dnsutils
+            dnsutils \
+            mtr-tiny \
+            nano \
+            vim-tiny \
+            wget \
+            iperf3
     "
 
     # ---- GRUB configuration ----
@@ -385,6 +400,9 @@ backend_cleanup() {
     run_in_chroot "
         apt-get clean
         rm -rf /var/lib/apt/lists/*
-        rm -rf /usr/share/perl5/*
+        # Keep Dpkg/ and Debconf/ modules (~500KB) so apt/dpkg-reconfigure still work
+        find /usr/share/perl5 -mindepth 1 -maxdepth 1 \
+            ! -name 'Dpkg' ! -name 'Dpkg.pm' ! -name 'Debconf' \
+            -exec rm -rf {} + 2>/dev/null || true
     "
 }

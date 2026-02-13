@@ -238,22 +238,23 @@ phase_cleanup_and_shrink() {
             # === Top-level subsystems ===
             rm -rf \"\$KDIR/sound\"
 
-            # === drivers/ — bulk removal (keep: net, virtio, block, tty, pci, hv) ===
+            # === drivers/ — bulk removal (keep: net, virtio, block, tty, pci, hv, char) ===
+            # NOTE: char = hw_random/virtio-rng/TPM (~2-3MB, critical VM entropy source)
             for d in media gpu infiniband iio comedi staging hid input video \
-                     bluetooth scsi usb platform md hwmon mtd misc target \
-                     accel mmc watchdog isdn edac char i2c crypto nvme \
-                     ata nfc rtc firewire thunderbolt ufs atm vfio message \
-                     leds xen vdpa ntb dma accessibility gpio pinctrl pcmcia \
-                     spi cpufreq memstick power soundwire ssb parport uio \
+                     bluetooth usb platform md mtd misc target \
+                     accel mmc isdn edac crypto \
+                     nfc firewire thunderbolt ufs atm vfio message \
+                     leds vdpa ntb dma accessibility gpio pinctrl pcmcia \
+                     spi memstick power soundwire ssb parport uio \
                      nvdimm rpmsg bcma auxdisplay cdrom mfd gnss dca mux \
                      pwm powercap soc regulator extcon dax devfreq; do
                 rm -rf \"\$KDIR/drivers/\$d\"
             done
 
             # === drivers/net/ — keep virtio, phy, bonding, ppp, vxlan, wireguard, hyperv, ethernet ===
-            for d in usb can wwan arcnet fddi hamradio ieee802154 wan wireless \
-                     dsa fjes hippi plip slip thunderbolt xen-netback team \
-                     mdio pcs vmxnet3 ipvlan; do
+            for d in can wwan arcnet fddi hamradio ieee802154 wan wireless \
+                     dsa fjes hippi plip slip thunderbolt xen-netback \
+                     mdio pcs ipvlan; do
                 rm -rf \"\$KDIR/drivers/net/\$d\"
             done
 
@@ -261,15 +262,16 @@ phase_cleanup_and_shrink() {
             if [ -d \"\$KDIR/drivers/net/ethernet\" ]; then
                 for d in \"\$KDIR/drivers/net/ethernet\"/*/; do
                     case \"\$(basename \"\$d\")\" in
-                        intel|realtek) ;;  # keep common physical NIC drivers
+                        intel|realtek|broadcom|amazon|google|mellanox|microsoft|aquantia|amd|huawei|marvell|atheros|cavium|chelsio) ;;  # keep common physical/cloud NIC drivers
                         *) rm -rf \"\$d\" ;;
                     esac
                 done
             fi
 
-            # === net/ — keep core, ipv4, ipv6, netfilter, bridge, sched, 8021q, tls, xfrm ===
+            # === net/ — keep core, ipv4, ipv6, netfilter, bridge, sched, 8021q, tls, xfrm, vmw_vsock ===
+            # NOTE: vmw_vsock kept for VMware/ESXi VM-host communication (~50KB)
             for d in bluetooth mac80211 wireless sunrpc ceph tipc nfc rxrpc smc sctp \
-                     atm dccp ieee802154 mac802154 6lowpan 9p openvswitch vmw_vsock \
+                     atm dccp ieee802154 mac802154 6lowpan 9p openvswitch \
                      rds l2tp phonet can x25 appletalk rfkill lapb nsh; do
                 rm -rf \"\$KDIR/net/\$d\"
             done
