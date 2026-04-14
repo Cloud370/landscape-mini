@@ -104,10 +104,11 @@ Auto-detects Debian / Alpine and runs `apt update` or `apk update` after switchi
 
 ## Default Credentials
 
-| User | Password |
-|------|----------|
-| `root` | `landscape` |
-| `ld` | `landscape` |
+| Purpose | User | Password |
+|---------|------|----------|
+| SSH / system login | `root` | `landscape` |
+| SSH / system login | `ld` | `landscape` |
+| Web admin UI | `root` | `root` |
 
 ## Build Configuration
 

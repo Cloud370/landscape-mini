@@ -368,10 +368,7 @@ run_all_checks() {
         test "$ip_fwd" = "1"
 
     if [[ "${INIT_SYSTEM}" == "systemd" ]]; then
-        wait_for_guest_command "sshd service" 30 3 \
-            guest_run "systemctl is-active --quiet ssh || systemctl is-active --quiet sshd"
-        run_check "sshd service running" \
-            guest_run "systemctl is-active --quiet ssh || systemctl is-active --quiet sshd"
+        run_skip "sshd service running" "SSH reachability already verified on systemd guests"
     else
         wait_for_guest_command "sshd service" 30 3 \
             check_service_active "sshd"
