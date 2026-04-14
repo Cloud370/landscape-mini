@@ -39,14 +39,14 @@ make build-alpine-docker
 ### Test
 
 ```bash
-# Automated health checks (non-interactive)
+# Automated readiness checks (non-interactive)
 make deps-test          # Install test dependencies (once)
-make test               # Debian health checks
-make test-alpine        # Alpine health checks
+make test               # Debian readiness
+make test-alpine        # Alpine readiness
 
-# E2E network tests (dual VM: router + client)
-make test-e2e           # Debian E2E
-make test-e2e-alpine    # Alpine E2E
+# Dataplane tests (dual VM: router + client)
+make test-dataplane         # Debian dataplane
+make test-dataplane-alpine  # Alpine dataplane
 
 # Interactive boot (serial console)
 make test-serial
@@ -168,27 +168,27 @@ sudo ./build.sh --skip-to 5              # Resume from phase 5
 
 ## Automated Testing
 
-### Health Checks
+### Readiness Checks
 
-`make test` / `make test-alpine` runs a fully unattended test cycle:
+`make test` / `make test-alpine` runs the unified router readiness contract:
 
-1. Copy image to temp file (protect build artifacts)
+1. Copy the image to a temp file (protect build artifacts)
 2. Start QEMU daemonized (auto-detects KVM)
-3. Wait for SSH (120s timeout)
-4. Run health checks via SSH (kernel, services, networking, Web UI, etc.)
-5. Report results and clean up
+3. Wait for SSH, API listener, API login, and layout detection
+4. Verify `eth0` / `eth1` plus the core services reach `running`
+5. Write readiness / service / diagnostics snapshots and clean up
 
 Auto-detects systemd (Debian) and OpenRC (Alpine) init systems.
 
-### E2E Network Tests
+### Dataplane Tests
 
-`make test-e2e` / `make test-e2e-alpine` runs a two-VM topology to test real routing:
+`make test-dataplane` / `make test-dataplane-alpine` runs a two-VM topology to validate real client-visible dataplane behavior:
 
 ```
 Router VM (eth0=WAN/SLIRP, eth1=LAN/mcast) ←→ Client VM (CirrOS, eth0=mcast)
 ```
 
-Tests: DHCP assignment, gateway connectivity, DNS resolution, NAT (client→internet via router).
+Tests: DHCP assignment, lease visibility in the router API, and Router ↔ Client LAN connectivity.
 
 Logs saved to `output/test-logs/`.
 
@@ -225,8 +225,8 @@ Logs saved to `output/test-logs/`.
 │           ├── landscape-router
 │           └── expand-rootfs
 ├── tests/
-│   ├── test-auto.sh      # Health check tests (supports systemd/OpenRC)
-│   └── test-e2e.sh       # E2E network tests (dual VM: DHCP/DNS/NAT)
+│   ├── test-readiness.sh  # Router readiness tests (shared SSH/API ready contract)
+│   └── test-dataplane.sh  # Dataplane tests (dual VM: DHCP + LAN connectivity)
 └── .github/workflows/
     ├── ci.yml            # CI: 4-variant parallel build+test
     ├── release.yml       # Release: build+test+publish
@@ -237,7 +237,7 @@ Logs saved to `output/test-logs/`.
 
 - **Triggers**: push to main (build files changed) or manual dispatch
 - **Matrix**: 4 variants fully parallel (`default`, `docker`, `alpine`, `alpine-docker`)
-- **Per variant**: build → health checks → E2E network tests (merged into single job, no cross-waiting)
+- **Per variant**: build → readiness checks → dataplane tests (merged into single job, no cross-waiting)
 - **Release**: `v*` tags trigger compression and GitHub Release creation
 
 ## License

@@ -10,7 +10,7 @@
 #   make              - Show all available targets
 #   make build        - Full build (Debian, without Docker)
 #   make build-alpine - Full build (Alpine, without Docker)
-#   make test         - Run automated health checks (non-interactive)
+#   make test         - Run automated readiness checks (non-interactive)
 #   make test-serial  - Boot image in QEMU (interactive serial console)
 #
 # Default credentials:  root / landscape  |  ld / landscape
@@ -19,7 +19,7 @@
 .PHONY: help deps deps-test \
 	build build-docker build-alpine build-alpine-docker \
 	test test-docker test-alpine test-alpine-docker \
-	test-e2e test-e2e-alpine \
+	test-dataplane test-dataplane-alpine \
 	test-serial test-gui ssh clean distclean status
 
 # --------------------------------------------------------------------------
@@ -88,34 +88,34 @@ build-alpine-docker: ## Build Alpine image with Docker (requires sudo)
 	sudo ./build.sh --base alpine --with-docker
 
 # --------------------------------------------------------------------------
-# QEMU test targets — Debian
+# QEMU readiness test targets
 # --------------------------------------------------------------------------
 
-test: $(IMAGE) ## Run health checks on Debian image
-	./tests/test-auto.sh $(IMAGE)
+test: $(IMAGE) ## Run readiness checks on Debian image
+	./tests/test-readiness.sh $(IMAGE)
 
-test-docker: output/landscape-mini-x86-docker.img ## Run health checks on Debian Docker image
-	./tests/test-auto.sh output/landscape-mini-x86-docker.img
-
-# --------------------------------------------------------------------------
-# QEMU test targets — Alpine
-# --------------------------------------------------------------------------
-
-test-alpine: $(IMAGE_ALPINE) ## Run health checks on Alpine image
-	./tests/test-auto.sh $(IMAGE_ALPINE)
-
-test-alpine-docker: output/landscape-mini-x86-alpine-docker.img ## Run health checks on Alpine Docker image
-	./tests/test-auto.sh output/landscape-mini-x86-alpine-docker.img
+test-docker: output/landscape-mini-x86-docker.img ## Run readiness checks on Debian Docker image
+	./tests/test-readiness.sh output/landscape-mini-x86-docker.img
 
 # --------------------------------------------------------------------------
-# End-to-end network tests (Router VM + CirrOS client)
+# QEMU readiness test targets — Alpine
 # --------------------------------------------------------------------------
 
-test-e2e: $(IMAGE) ## Run E2E network tests on Debian image (DHCP, DNS, NAT)
-	./tests/test-e2e.sh $(IMAGE)
+test-alpine: $(IMAGE_ALPINE) ## Run readiness checks on Alpine image
+	./tests/test-readiness.sh $(IMAGE_ALPINE)
 
-test-e2e-alpine: $(IMAGE_ALPINE) ## Run E2E network tests on Alpine image (DHCP, DNS, NAT)
-	./tests/test-e2e.sh $(IMAGE_ALPINE)
+test-alpine-docker: output/landscape-mini-x86-alpine-docker.img ## Run readiness checks on Alpine Docker image
+	./tests/test-readiness.sh output/landscape-mini-x86-alpine-docker.img
+
+# --------------------------------------------------------------------------
+# Dataplane tests (Router VM + CirrOS client)
+# --------------------------------------------------------------------------
+
+test-dataplane: $(IMAGE) ## Run dataplane tests on Debian image (DHCP + LAN connectivity)
+	./tests/test-dataplane.sh $(IMAGE)
+
+test-dataplane-alpine: $(IMAGE_ALPINE) ## Run dataplane tests on Alpine image (DHCP + LAN connectivity)
+	./tests/test-dataplane.sh $(IMAGE_ALPINE)
 
 # --------------------------------------------------------------------------
 # Interactive QEMU targets

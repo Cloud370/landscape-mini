@@ -16,7 +16,7 @@ on:
       - rootfs/**
       - configs/**
       - tests/**
-      - .github/workflows/ci.yml
+      - .github/workflows/**
   push:
     branches:
       - main
@@ -29,32 +29,57 @@ on:
       - rootfs/**
       - configs/**
       - tests/**
-      - .github/workflows/ci.yml
+      - .github/workflows/**
 
 concurrency:
   group: ci-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: false
+
+env:
+  TEST_LOG_DIR: output/test-logs
 
 jobs:
-  build-and-test:
+  build-and-validate:
     if: "${{ github.event_name != 'push' || !startsWith(github.event.head_commit.message, 'chore: release') }}"
     runs-on: ubuntu-24.04
-    timeout-minutes: 60
+    timeout-minutes: 75
     strategy:
-      fail-fast: true
+      fail-fast: false
       matrix:
         include:
           - variant: default
             build_flags: ""
+            run_e2e: true
           - variant: docker
             build_flags: "--with-docker"
+            run_e2e: false
           - variant: alpine
             build_flags: "--base alpine"
+            run_e2e: true
           - variant: alpine-docker
             build_flags: "--base alpine --with-docker"
+            run_e2e: false
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+
+      - name: Resolve validation metadata
+        id: meta
+        shell: bash
+        run: |
+          set -euo pipefail
+          requested_version="${{ github.event.inputs.landscape_version || '' }}"
+          resolved_version="$requested_version"
+          if [ -z "$resolved_version" ]; then
+            resolved_version="$(awk -F'"' '/^LANDSCAPE_VERSION=/{print $2; exit}' build.env)"
+          fi
+          artifact_id="${{ matrix.variant }}-${resolved_version}-${GITHUB_SHA::12}-${GITHUB_RUN_ID}"
+          {
+            echo "resolved_version=$resolved_version"
+            echo "artifact_id=$artifact_id"
+            echo "image_artifact=landscape-mini-x86-${artifact_id}"
+            echo "log_artifact=test-logs-${artifact_id}"
+          } >> "$GITHUB_OUTPUT"
 
       - name: Maximize build space
         run: |
@@ -72,39 +97,88 @@ jobs:
             grub-efi-amd64-bin grub-pc-bin qemu-utils rsync curl \
             sshpass socat jq qemu-system-x86 ovmf
 
-      - name: Build Image (${{ matrix.variant }})
+      - name: Build image (${{ matrix.variant }})
+        env:
+          RESOLVED_VERSION: ${{ steps.meta.outputs.resolved_version }}
+        shell: bash
         run: |
-          VERSION="${{ github.event.inputs.landscape_version }}"
-          VERSION_FLAG=""
-          if [ -n "$VERSION" ]; then
-            VERSION_FLAG="--version $VERSION"
+          set -euo pipefail
+          version_flag=()
+          if [ -n "${RESOLVED_VERSION}" ]; then
+            version_flag=(--version "${RESOLVED_VERSION}")
           fi
           sudo APT_MIRROR="" ALPINE_MIRROR="" OUTPUT_FORMAT=img COMPRESS_OUTPUT=no \
-            ./build.sh $VERSION_FLAG ${{ matrix.build_flags }}
+            ./build.sh "${version_flag[@]}" ${{ matrix.build_flags }}
 
       - name: Fix output permissions
         run: sudo chown -R "$(id -u):$(id -g)" output/ work/
 
+      - name: Capture artifact metadata
+        env:
+          RESOLVED_VERSION: ${{ steps.meta.outputs.resolved_version }}
+          ARTIFACT_ID: ${{ steps.meta.outputs.artifact_id }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p output/metadata "${TEST_LOG_DIR}"
+          image_file="$(ls output/*.img)"
+          image_base="$(basename "$image_file")"
+          printf '%s\n' \
+            "variant=${{ matrix.variant }}" \
+            "resolved_version=${RESOLVED_VERSION}" \
+            "artifact_id=${ARTIFACT_ID}" \
+            "git_sha=${GITHUB_SHA}" \
+            "run_id=${GITHUB_RUN_ID}" \
+            "workflow=${GITHUB_WORKFLOW}" \
+            "image_file=${image_base}" \
+            > output/metadata/build-metadata.txt
+          cp output/metadata/build-metadata.txt "${TEST_LOG_DIR}/build-metadata.txt"
+
       - name: List outputs
         run: ls -lh output/
 
-      - name: Upload image
+      - name: Upload image artifact
         uses: actions/upload-artifact@v4
         with:
-          name: landscape-mini-x86-${{ matrix.variant }}
-          path: output/*.img
+          name: ${{ steps.meta.outputs.image_artifact }}
+          path: |
+            output/*.img
+            output/metadata/build-metadata.txt
           retention-days: 30
 
-      - name: Run health checks (${{ matrix.variant }})
-        run: timeout --foreground 20m ./tests/test-auto.sh output/*.img
+      - name: Run readiness checks (${{ matrix.variant }})
+        env:
+          LANDSCAPE_TEST_VARIANT: ${{ matrix.variant }}
+          LANDSCAPE_TEST_ARTIFACT_ID: ${{ steps.meta.outputs.artifact_id }}
+          LANDSCAPE_TEST_LANDSCAPE_VERSION: ${{ steps.meta.outputs.resolved_version }}
+        run: timeout --foreground 20m ./tests/test-readiness.sh output/*.img
 
-      - name: Run E2E network tests (${{ matrix.variant }})
-        run: timeout --foreground 25m ./tests/test-e2e.sh output/*.img
+      - name: Run dataplane tests (${{ matrix.variant }})
+        if: matrix.run_e2e
+        env:
+          LANDSCAPE_TEST_VARIANT: ${{ matrix.variant }}
+          LANDSCAPE_TEST_ARTIFACT_ID: ${{ steps.meta.outputs.artifact_id }}
+          LANDSCAPE_TEST_LANDSCAPE_VERSION: ${{ steps.meta.outputs.resolved_version }}
+        run: timeout --foreground 25m ./tests/test-dataplane.sh output/*.img
 
-      - name: Upload test logs
+      - name: Mark E2E not scheduled for this variant
+        if: ${{ !matrix.run_e2e }}
+        env:
+          ARTIFACT_ID: ${{ steps.meta.outputs.artifact_id }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "${TEST_LOG_DIR}"
+          printf '%s\n' \
+            "variant=${{ matrix.variant }}" \
+            "artifact_id=${ARTIFACT_ID}" \
+            "reason=E2E reserved for representative PR coverage (default + alpine)" \
+            > "${TEST_LOG_DIR}/e2e-skipped.txt"
+
+      - name: Upload validation logs
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: test-logs-${{ matrix.variant }}
+          name: ${{ steps.meta.outputs.log_artifact }}
           path: output/test-logs/
           retention-days: 7

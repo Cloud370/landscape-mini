@@ -17,12 +17,12 @@ make build             # Build Debian image (requires sudo)
 make build-docker      # Build Debian image with Docker (requires sudo)
 make build-alpine      # Build Alpine image (requires sudo)
 make build-alpine-docker # Build Alpine image with Docker (requires sudo)
-make test              # Run health checks on Debian image
-make test-docker       # Run health checks on Debian Docker image
-make test-alpine       # Run health checks on Alpine image
-make test-alpine-docker # Run health checks on Alpine Docker image
-make test-e2e          # E2E network tests: DHCP, DNS, NAT (Debian)
-make test-e2e-alpine   # E2E network tests: DHCP, DNS, NAT (Alpine)
+make test              # Run readiness checks on Debian image
+make test-docker       # Run readiness checks on Debian Docker image
+make test-alpine       # Run readiness checks on Alpine image
+make test-alpine-docker # Run readiness checks on Alpine Docker image
+make test-dataplane    # Dataplane tests: DHCP + LAN connectivity (Debian)
+make test-dataplane-alpine # Dataplane tests: DHCP + LAN connectivity (Alpine)
 make test-serial       # Boot in QEMU (interactive serial console)
 make test-gui          # Boot in QEMU with VGA display
 make ssh               # SSH into running QEMU instance (port 2222)
@@ -74,8 +74,8 @@ The 8 sequential phases:
 - `build.env` — Build configuration (version, image size, mirrors, format, passwords)
 - `rootfs/` — Files copied into the image (systemd units, OpenRC scripts, sysctl tuning, `expand-rootfs.sh`, `setup-mirror.sh`)
 - `configs/landscape_init.toml` — Optional router init config (WAN/LAN interfaces, DHCP, NAT rules)
-- `tests/test-auto.sh` — Health check test runner (QEMU lifecycle, SSH checks, supports systemd and OpenRC)
-- `tests/test-e2e.sh` — E2E network test: two-VM topology (Router + CirrOS client), tests DHCP/DNS/NAT via SSH hop
+- `tests/test-readiness.sh` — Router readiness test runner (shared boot/SSH/API contract, supports systemd and OpenRC)
+- `tests/test-dataplane.sh` — Dataplane test: two-VM topology (Router + CirrOS client), validates DHCP + LAN connectivity after readiness
 - `CHANGELOG.md` — Bilingual (EN/CN) changelog following Keep a Changelog format
 
 ### Image Size Reduction

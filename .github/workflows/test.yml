@@ -4,14 +4,21 @@ on:
   workflow_dispatch:
     inputs:
       run_id:
-        description: "Build workflow run ID (leave empty for latest)"
+        description: "Build workflow run ID (leave empty for latest CI run on main)"
+        default: ""
+      artifact_suffix:
+        description: "Artifact suffix: <variant>-<version>-<sha12>-<runid> (leave empty to auto-resolve latest)"
+        default: ""
+      landscape_version:
+        description: "Expected Landscape version for metadata (optional)"
         default: ""
 
 jobs:
   test:
     runs-on: ubuntu-24.04
-    timeout-minutes: 45
+    timeout-minutes: 55
     strategy:
+      fail-fast: false
       matrix:
         include:
           - variant: default
@@ -25,39 +32,85 @@ jobs:
       - name: Install test dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y sshpass socat curl jq qemu-system-x86 ovmf
+          sudo apt-get install -y sshpass socat curl jq qemu-system-x86 ovmf unzip
 
-      - name: Download image from build artifacts
+      - name: Resolve artifact names
+        id: meta
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          suffix="${{ github.event.inputs.artifact_suffix }}"
+          run_id="${{ github.event.inputs.run_id }}"
+          if [ -n "$suffix" ]; then
+            artifact_id="$suffix"
+            if [ -z "$run_id" ]; then
+              run_id="${suffix##*-}"
+            fi
+          else
+            if [ -z "$run_id" ]; then
+              run_id="$(gh run list --workflow ci.yml --branch main --limit 1 --json databaseId --jq '.[0].databaseId')"
+            fi
+            artifact_name="$(gh api \
+              repos/${{ github.repository }}/actions/runs/${run_id}/artifacts \
+              --jq '.artifacts[] | select(.name | startswith("landscape-mini-x86-${{ matrix.variant }}-")) | .name' | head -n 1)"
+            if [ -z "$artifact_name" ]; then
+              echo "Unable to resolve artifact for variant ${{ matrix.variant }} from run ${run_id}" >&2
+              exit 1
+            fi
+            artifact_id="${artifact_name#landscape-mini-x86-}"
+          fi
+          {
+            echo "resolved_run_id=$run_id"
+            echo "artifact_id=$artifact_id"
+            echo "image_artifact=landscape-mini-x86-$artifact_id"
+            echo "log_artifact=test-logs-$artifact_id"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Download image artifact
         uses: actions/download-artifact@v4
         with:
-          name: landscape-mini-x86-${{ matrix.variant }}
+          name: ${{ steps.meta.outputs.image_artifact }}
           path: output/
           github-token: ${{ secrets.GITHUB_TOKEN }}
-          run-id: ${{ github.event.inputs.run_id || '' }}
-        continue-on-error: true
-        id: download-same-run
+          run-id: ${{ steps.meta.outputs.resolved_run_id }}
 
-      - name: Download latest image (fallback)
-        if: steps.download-same-run.outcome == 'failure'
-        uses: dawidd6/action-download-artifact@v6
-        with:
-          name: landscape-mini-x86-${{ matrix.variant }}
-          path: output/
-          workflow: ci.yml
-          search_artifacts: true
-
-      - name: Run health checks (${{ matrix.variant }})
+      - name: Restore build metadata into test logs
+        shell: bash
         run: |
-          ls -lh output/
-          timeout --foreground 20m ./tests/test-auto.sh output/*.img
+          set -euo pipefail
+          mkdir -p output/test-logs
+          resolved_version="${{ github.event.inputs.landscape_version }}"
+          if [ -f output/build-metadata.txt ]; then
+            cp output/build-metadata.txt output/test-logs/build-metadata.txt
+            if [ -z "$resolved_version" ]; then
+              resolved_version="$(awk -F'=' '/^resolved_version=/{print $2; exit}' output/build-metadata.txt)"
+            fi
+          fi
+          echo "test_landscape_version=$resolved_version" >> "$GITHUB_ENV"
 
-      - name: Run E2E network tests (${{ matrix.variant }})
-        run: timeout --foreground 25m ./tests/test-e2e.sh output/*.img
+      - name: List outputs
+        run: ls -lh output/
+
+      - name: Run readiness checks (${{ matrix.variant }})
+        env:
+          LANDSCAPE_TEST_VARIANT: ${{ matrix.variant }}
+          LANDSCAPE_TEST_ARTIFACT_ID: ${{ steps.meta.outputs.artifact_id }}
+          LANDSCAPE_TEST_LANDSCAPE_VERSION: ${{ env.test_landscape_version }}
+        run: timeout --foreground 20m ./tests/test-readiness.sh output/*.img
+
+      - name: Run dataplane tests (${{ matrix.variant }})
+        env:
+          LANDSCAPE_TEST_VARIANT: ${{ matrix.variant }}
+          LANDSCAPE_TEST_ARTIFACT_ID: ${{ steps.meta.outputs.artifact_id }}
+          LANDSCAPE_TEST_LANDSCAPE_VERSION: ${{ env.test_landscape_version }}
+        run: timeout --foreground 25m ./tests/test-dataplane.sh output/*.img
 
       - name: Upload test logs
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: test-logs-${{ matrix.variant }}
+          name: test-logs-retest-${{ steps.meta.outputs.artifact_id }}
           path: output/test-logs/
           retention-days: 7

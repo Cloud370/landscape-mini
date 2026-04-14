@@ -39,14 +39,14 @@ make build-alpine-docker
 ### 测试
 
 ```bash
-# 自动化健康检查（无需交互）
+# 自动化 readiness 检查（无需交互）
 make deps-test      # 首次需安装测试依赖
-make test           # Debian 健康检查
-make test-alpine    # Alpine 健康检查
+make test           # Debian readiness
+make test-alpine    # Alpine readiness
 
-# E2E 网络测试（双 VM：路由器 + 客户端）
-make test-e2e           # Debian E2E
-make test-e2e-alpine    # Alpine E2E
+# 数据面测试（双 VM：路由器 + 客户端）
+make test-dataplane        # Debian dataplane
+make test-dataplane-alpine # Alpine dataplane
 
 # 交互式启动（串口控制台）
 make test-serial
@@ -168,27 +168,27 @@ sudo ./build.sh --skip-to 5              # 从第 5 阶段恢复构建
 
 ## 自动化测试
 
-### 健康检查
+### Readiness 检查
 
-`make test` / `make test-alpine` 执行完整的无人值守测试流程：
+`make test` / `make test-alpine` 执行统一的 router readiness 契约验证：
 
 1. 复制镜像到临时文件（保护构建产物）
 2. 后台启动 QEMU（自动检测 KVM）
-3. 等待 SSH 就绪（120s 超时）
-4. 执行健康检查（内核、服务、网络、Web UI 等）
-5. 输出结果并清理 QEMU
+3. 等待 SSH、API listener、API login、layout 检测完成
+4. 验证 `eth0` / `eth1` 以及核心服务进入 running
+5. 输出 readiness / service / diagnostics 快照并清理 QEMU
 
 自动适配 systemd（Debian）和 OpenRC（Alpine）两种 init 系统。
 
-### E2E 网络测试
+### Dataplane 测试
 
-`make test-e2e` / `make test-e2e-alpine` 使用双 VM 拓扑测试真实路由功能：
+`make test-dataplane` / `make test-dataplane-alpine` 使用双 VM 拓扑验证真实 client-visible dataplane：
 
 ```
 Router VM (eth0=WAN/SLIRP, eth1=LAN/mcast) ←→ Client VM (CirrOS, eth0=mcast)
 ```
 
-测试项：DHCP 分配、网关连通、DNS 解析、NAT（客户端经路由器上网）。
+测试项：DHCP 分配、Router API 中 lease 可见、Router ↔ Client LAN 连通。
 
 测试日志输出到 `output/test-logs/`。
 
@@ -225,8 +225,8 @@ Router VM (eth0=WAN/SLIRP, eth1=LAN/mcast) ←→ Client VM (CirrOS, eth0=mcast)
 │           ├── landscape-router
 │           └── expand-rootfs
 ├── tests/
-│   ├── test-auto.sh      # 健康检查测试（支持 systemd/OpenRC）
-│   └── test-e2e.sh       # E2E 网络测试（双 VM：DHCP/DNS/NAT）
+│   ├── test-readiness.sh  # Router readiness 测试（共享 SSH/API ready 契约）
+│   └── test-dataplane.sh  # Dataplane 测试（双 VM：DHCP + LAN 连通）
 └── .github/workflows/
     ├── ci.yml            # CI：4 变体并行构建+测试
     ├── release.yml       # Release：构建+测试+发布
@@ -237,7 +237,7 @@ Router VM (eth0=WAN/SLIRP, eth1=LAN/mcast) ←→ Client VM (CirrOS, eth0=mcast)
 
 - **触发条件**：推送到 main（构建相关文件变更时）或手动触发
 - **构建矩阵**：4 变体完全并行（`default`、`docker`、`alpine`、`alpine-docker`）
-- **每个变体**：构建 → 健康检查 → E2E 网络测试（合并为单个 job，互不等待）
+- **每个变体**：构建 → readiness 检查 → dataplane 测试（合并为单个 job，互不等待）
 - **Release**：打 `v*` 标签时自动压缩镜像并创建 GitHub Release
 
 ## 许可证
