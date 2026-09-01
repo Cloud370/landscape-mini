@@ -39,6 +39,18 @@ If you already know you want to build locally, debug, or validate unpushed chang
 
 ### Local Build
 
+Builds run **rootless by default**: chroot-style steps go through Linux user
+namespaces, so no `sudo`, loop devices, or mounts are needed (running as root
+still works). Requirements: Linux with unprivileged user namespaces enabled
+(the default on mainstream distros) plus `make deps`. `make deps` also installs
+`uidmap`: together with the `/etc/subuid` + `/etc/subgid` ranges that
+Debian/Ubuntu grant human users by default, the build maps those delegated
+ids into its namespace so dpkg's group ownerships (shadow, crontab, ...)
+land natively — Debian chroot keeps native speed. `proot` is installed as a
+fallback for hosts without user namespaces (or without subid delegation);
+package phases run noticeably slower there. macOS users should build inside a
+Linux VM or container.
+
 Local configuration is layered with this precedence:
 
 `build.env < build.env.<profile> < build.env.local < explicit environment variables`

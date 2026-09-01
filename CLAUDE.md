@@ -34,7 +34,7 @@ Choose the path that matches the user’s goal:
 ```bash
 make deps
 make deps-test
-make build
+make build              # rootless by default; works as root too
 make build BASE_SYSTEM=alpine
 make build INCLUDE_DOCKER=true OUTPUT_FORMATS=img,ova
 make test
@@ -42,6 +42,36 @@ make test-dataplane
 make test-serial
 make ssh
 ```
+
+## Rootless build model
+
+- The build never uses loop devices, partition mounts, or persistent chroot
+  mounts: the rootfs lives in `work/rootfs` and is packed into the image
+  offline (`mke2fs -d` + mtools + `sgdisk` on image files).
+- Chroot steps go through a chroot engine, auto-detected at start:
+  root → `chroot`; rootless → `unshare --map-root-user --map-auto` when subid
+  delegation is available (`uidmap` + `/etc/subuid` + `/etc/subgid`, the
+  Debian/Ubuntu default for human users), which maps every guest id below
+  65536 so dpkg's group ownerships (shadow, crontab, ...) land natively at
+  full chroot speed; otherwise `proot` (fakes the chowns, slower package
+  phases). `mkfs` (`run_uid_mapped`) uses the same mapping so image gids
+  match what dpkg set in the tree. Override with
+  `BUILD_CHROOT_ENGINE=chroot|unshare|proot`.
+- GRUB is installed host-side: EFI via `grub-mkstandalone` (the `linux`
+  loader is embedded in the standalone binary — the image ships no GRUB
+  module directory), BIOS by embedding boot.img/core.img directly into the
+  image (bootloader packages are not installed into the image).
+- Filesystem UUIDs are generated in phase 2 and persisted in
+  `work/image-layout.env` (used by fstab, initramfs, grub.cfg). The ESP
+  serial must appear in fstab as uppercase `XXXX-XXXX` — blkid matches vfat
+  UUIDs case-sensitively.
+- The `ld` user is pinned to uid 1000; rootless images fix `/home/ld`
+  ownership and restore gid-based setgid binaries (unix_chkpwd → shadow) on
+  first boot via the expand-rootfs hook.
+- Alpine installs packages host-side via `apk.static --root`; Debian runs
+  `debootstrap --foreign` + second stage through the engine. Package caches
+  live under `CACHE_DIR` (apk directly, apt via rsync sync).
+- `--skip-to` resumes operate on the `work/rootfs` tree, not the image.
 
 ## Defaults and important inputs
 

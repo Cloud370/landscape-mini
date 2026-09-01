@@ -39,6 +39,15 @@ Landscape Router 的最小化 x86 镜像构建器。支持 **Debian Trixie** 和
 
 ### 本地构建
 
+构建默认以**普通用户身份运行（rootless）**：chroot 类操作通过 Linux 用户
+命名空间完成，不再需要 `sudo`、loop 设备或挂载；以 root 身份运行也依然支持。
+要求：Linux（内核支持非特权用户命名空间，主流发行版默认开启）+ `make deps`
+安装依赖。其中 `uidmap` 配合 Debian/Ubuntu 默认为人类用户分配的
+`/etc/subuid`、`/etc/subgid` 委派范围，构建会把这批 id 映射进命名空间，
+dpkg 的组属主写入（shadow、crontab 等）原生完成，Debian 基座的 chroot
+保持原生速度；`proot` 是无用户命名空间（或无 subid 委派）环境的兜底，
+该路径下包安装阶段会明显变慢。macOS 用户请在 Linux 虚拟机或容器中构建。
+
 本地配置现在按以下优先级分层加载：
 
 `build.env < build.env.<profile> < build.env.local < 显式环境变量`

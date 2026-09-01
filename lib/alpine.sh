@@ -10,37 +10,66 @@
 #   - Requires gcompat (glibc compat layer) for landscape-webserver binary
 #   - Uses mkinitfs instead of initramfs-tools
 #   - Smaller footprint (~150MB vs ~312MB)
+#
+# All package operations run host-side via apk-tools-static with --root, so no
+# chroot or bind mounts are needed for apk itself (works root and rootless).
 # =============================================================================
 
 CHROOT_SHELL="/bin/sh"
-
-# Alpine mirror (use build.env value)
-# ALPINE_MIRROR is set by build.env (default: official Alpine CDN)
 
 # ---------------------------------------------------------------------------
 # Check host dependencies for Alpine builds
 # ---------------------------------------------------------------------------
 backend_check_deps() {
-    for cmd in parted losetup mkfs.vfat mkfs.ext4 blkid e2fsck resize2fs curl unzip sgdisk; do
-        if ! command -v "${cmd}" &>/dev/null; then
-            echo "ERROR: Required command '${cmd}' not found. Please install it first."
-            exit 1
+    # Core deps (mkfs/mtools/sgdisk/grub/engine) are checked by check_core_deps.
+    true
+}
+
+# ---------------------------------------------------------------------------
+# Shared apk.static invocation: host-side, persistent cache, no mounts
+# ---------------------------------------------------------------------------
+ALPINE_APK_STATIC=""
+
+alpine_apk() {
+    local output rc
+
+    if [[ -z "${ALPINE_APK_STATIC}" ]]; then
+        # Phase 3 may have been skipped on resumed builds; locate the cached
+        # apk.static lazily so later phases keep working.
+        ALPINE_APK_STATIC="${DOWNLOAD_DIR}/apk-tools/sbin/apk.static"
+        if [[ ! -x "${ALPINE_APK_STATIC}" ]]; then
+            echo "ERROR: apk.static not found at ${ALPINE_APK_STATIC}; run phase 3 first." >&2
+            return 1
         fi
-    done
-    # Note: apk-tools-static is downloaded at runtime, no host dependency needed
-}
+    fi
 
-# ---------------------------------------------------------------------------
-# Persistent apk cache (host-side, survives `make clean`)
-# ---------------------------------------------------------------------------
-setup_apk_cache_mount() {
-    mkdir -p "${CACHE_DIR}/apk" "${ROOTFS_DIR}/etc/apk/cache"
-    mount --bind "${CACHE_DIR}/apk" "${ROOTFS_DIR}/etc/apk/cache"
-    echo "  Apk package cache mounted: ${CACHE_DIR}/apk"
-}
+    set +e
+    output=$(run_as_build_root "${ALPINE_APK_STATIC}" \
+        --root "${ROOTFS_DIR}" \
+        --cache-dir "${CACHE_DIR}/apk" \
+        "$@" 2>&1)
+    rc=$?
+    set -e
+    printf '%s\n' "${output}"
 
-umount_apk_cache() {
-    umount "${ROOTFS_DIR}/etc/apk/cache" 2>/dev/null || true
+    if [[ ${rc} -eq 0 ]]; then
+        return 0
+    fi
+
+    # Rootless builds run apk inside a user namespace that only maps uid/gid 0,
+    # so apk cannot restore ownership of files owned by other accounts (e.g.
+    # setgid utilities). apk flags those as fatal even though every package
+    # was unpacked and configured — tolerate ownership-only failures there.
+    # Note: on re-runs against an already-installed set, apk repeats the same
+    # fixup failures but only surfaces them via the "N errors;" summary line.
+    if [[ "${BUILD_PRIVILEGE}" == "rootless" ]] \
+        && ! printf '%s\n' "${output}" | grep -E '^ERROR:' | grep -Ev 'Failed to set ownership' | grep -q . \
+        && printf '%s\n' "${output}" | grep -Eq '(^ERROR: Failed to set ownership|^[0-9]+ errors; )'; then
+        echo "  [WARN] apk finished with ownership-only errors (unmapped uid/gid in the build namespace); continuing."
+        return 0
+    fi
+
+    return "${rc}"
 }
 
 # =============================================================================
@@ -59,7 +88,7 @@ backend_bootstrap() {
         mkdir -p "${APK_TOOLS_DIR}"
         local APK_TOOLS_URL="${RESOLVED_ALPINE_MIRROR}/${ALPINE_RELEASE}/main/x86_64"
         local APK_TOOLS_PKG
-        APK_TOOLS_PKG=$(curl -fsSL --retry 3 --retry-delay 2 "${APK_TOOLS_URL}/" | grep -oP 'apk-tools-static-[0-9][^"]*\.apk' | head -1)
+        APK_TOOLS_PKG=$(curl -fsSL --retry 3 --retry-delay 2 "${APK_TOOLS_URL}/" | grep -oE 'apk-tools-static-[0-9][^"]*\.apk' | head -1)
         if [[ -z "${APK_TOOLS_PKG}" ]]; then
             echo "ERROR: Could not find apk-tools-static package at ${APK_TOOLS_URL}/"
             exit 1
@@ -71,19 +100,21 @@ backend_bootstrap() {
     else
         echo "  [OK] apk-tools-static already cached."
     fi
+    ALPINE_APK_STATIC="${APK_STATIC}"
+    mkdir -p "${CACHE_DIR}/apk"
 
     # Bootstrap Alpine minimal root
     echo "  Running apk.static --initdb add alpine-base ..."
+    # Start from a clean tree: apk does not remove files a previous, larger
+    # build left behind, so stale packages would leak into the new image.
+    rm -rf "${ROOTFS_DIR}"
     mkdir -p "${ROOTFS_DIR}/etc/apk"
     echo "${RESOLVED_ALPINE_MIRROR}/${ALPINE_RELEASE}/main" > "${ROOTFS_DIR}/etc/apk/repositories"
     echo "${RESOLVED_ALPINE_MIRROR}/${ALPINE_RELEASE}/community" >> "${ROOTFS_DIR}/etc/apk/repositories"
 
-    retry_command 3 5 "${APK_STATIC}" \
-        --root "${ROOTFS_DIR}" \
+    retry_command 3 5 alpine_apk \
         --initdb \
-        --update-cache \
         --allow-untrusted \
-        --repositories-file "${ROOTFS_DIR}/etc/apk/repositories" \
         add alpine-base
 
     echo "  Phase 3 complete."
@@ -96,14 +127,8 @@ backend_configure() {
     echo ""
     echo "==== Phase 4: Configuring System (Alpine) ===="
 
-    # Mount bind filesystems for chroot
+    # Mount bind filesystems for the classic chroot engine (no-op otherwise)
     mount_chroot_fs
-
-    # Persistent package cache for faster rebuilds
-    setup_apk_cache_mount
-
-    # ---- Build-time DNS resolver (needed for apk to fetch packages) ----
-    configure_build_resolver
 
     # ---- APK repositories ----
     echo "  Writing /etc/apk/repositories ..."
@@ -123,59 +148,49 @@ EOF
 
     # ---- fstab ----
     echo "  Writing /etc/fstab ..."
-    local ROOT_UUID
-    local EFI_UUID
-    ROOT_UUID=$(blkid -s UUID -o value "${LOOP_DEV}p3")
-    EFI_UUID=$(blkid -s UUID -o value "${LOOP_DEV}p2")
-
     cat > "${ROOTFS_DIR}/etc/fstab" <<EOF
 # <filesystem>                          <mount>     <type>  <options>           <dump>  <pass>
 UUID=${ROOT_UUID}   /           ext4    errors=remount-ro   0       1
-UUID=${EFI_UUID}    /boot/efi   vfat    umask=0077          0       2
+UUID=$(esp_uuid_pretty)    /boot/efi   vfat    umask=0077          0       2
 EOF
 
     # ---- Install packages ----
     echo "  Installing packages (this may take a while) ..."
     # Keep targeted wired-NIC firmware only. Avoid the full linux-firmware meta-package,
     # which pulls in large GPU/Wi-Fi/SoC firmware sets unrelated to this x86 router image.
-    # /etc/apk/cache is bind-mounted to the host cache dir; `apk update`
-    # refreshes the index so cached packages stay consistent.
-    run_in_chroot_retry 3 5 "
-        apk update
-        apk add \
-            linux-lts \
-            linux-firmware-rtl_nic \
-            linux-firmware-bnx2 \
-            linux-firmware-bnx2x \
-            linux-firmware-e100 \
-            grub-efi grub-bios \
-            mkinitfs \
-            e2fsprogs e2fsprogs-extra \
-            zstd \
-            iproute2 \
-            iptables ip6tables \
-            bpftool \
-            ppp \
-            tcpdump \
-            ethtool \
-            pciutils \
-            curl \
-            ca-certificates \
-            unzip \
-            sudo \
-            openssh \
-            sgdisk \
-            cloud-utils-growpart \
-            iputils bind-tools mtr \
-            libgcc zlib zstd-libs \
-            openrc busybox-openrc busybox-mdev-openrc \
-            losetup \
-            findutils \
-            dosfstools \
-            util-linux \
-            nano \
-            iperf3
-    "
+    # Downloaded packages persist in the host-side cache dir for faster rebuilds.
+    retry_command 3 5 alpine_apk add \
+        linux-lts \
+        linux-firmware-rtl_nic \
+        linux-firmware-bnx2 \
+        linux-firmware-bnx2x \
+        linux-firmware-e100 \
+        mkinitfs \
+        e2fsprogs e2fsprogs-extra \
+        zstd \
+        iproute2 \
+        iptables ip6tables \
+        bpftool \
+        ppp \
+        tcpdump \
+        ethtool \
+        pciutils \
+        curl \
+        ca-certificates \
+        unzip \
+        sudo \
+        openssh \
+        sgdisk \
+        cloud-utils-growpart \
+        iputils bind-tools mtr \
+        libgcc zlib zstd-libs \
+        openrc busybox-openrc busybox-mdev-openrc \
+        losetup \
+        findutils \
+        dosfstools \
+        util-linux \
+        nano \
+        iperf3
 
     # ---- Configure mkinitfs features and rebuild initramfs ----
     echo "  Configuring mkinitfs ..."
@@ -185,7 +200,7 @@ features="ata base ext4 nvme scsi virtio xen"
 EOF
 
     echo "  Building initramfs ..."
-    run_in_chroot "
+    run_rootfs_cmd "
         KVER=\$(ls /lib/modules/ 2>/dev/null | grep lts | head -1)
         if [ -z \"\$KVER\" ]; then
             KVER=\$(ls /lib/modules/ | head -1)
@@ -195,7 +210,10 @@ EOF
     "
 
     # ---- GRUB configuration ----
-    echo "  Configuring GRUB ..."
+    # The bootloader itself is installed host-side in Phase 7 (offline image
+    # assembly); only the defaults file is written into the rootfs.
+    echo "  Writing /etc/default/grub ..."
+    mkdir -p "${ROOTFS_DIR}/etc/default"
     cat > "${ROOTFS_DIR}/etc/default/grub" <<'EOF'
 GRUB_DEFAULT=0
 GRUB_TIMEOUT=3
@@ -207,27 +225,12 @@ GRUB_TERMINAL_OUTPUT="serial"
 GRUB_SERIAL_COMMAND="serial --speed=115200 --unit=0 --word=8 --parity=no --stop=1"
 EOF
 
-    run_in_chroot "
-        grub-install \
-            --target=x86_64-efi \
-            --efi-directory=/boot/efi \
-            --bootloader-id=landscape \
-            --removable \
-            --no-nvram
-        grub-install \
-            --target=i386-pc \
-            ${LOOP_DEV}
-        grub-mkconfig -o /boot/grub/grub.cfg
-    "
-
     # ---- Timezone ----
     echo "  Setting timezone to ${TIMEZONE} ..."
-    run_in_chroot_retry 3 5 "
-        apk add tzdata 2>/dev/null || true
-        cp /usr/share/zoneinfo/${TIMEZONE} /etc/localtime 2>/dev/null || true
-        echo '${TIMEZONE}' > /etc/timezone
-        apk del tzdata 2>/dev/null || true
-    "
+    retry_command 3 5 alpine_apk add tzdata
+    cp "${ROOTFS_DIR}/usr/share/zoneinfo/${TIMEZONE}" "${ROOTFS_DIR}/etc/localtime" 2>/dev/null || true
+    echo "${TIMEZONE}" > "${ROOTFS_DIR}/etc/timezone"
+    alpine_apk del tzdata 2>/dev/null || true
 
     # ---- Locale ----
     echo "  Configuring locale (${LOCALE}) ..."
@@ -239,19 +242,33 @@ EOF
 
     # ---- Root password ----
     echo "  Setting root password ..."
-    run_in_chroot "echo 'root:${ROOT_PASSWORD}' | chpasswd"
+    run_rootfs_cmd "echo 'root:${ROOT_PASSWORD}' | chpasswd"
 
-    # ---- Create user 'ld' ----
+    # ---- Create user 'ld' (fixed uid 1000) ----
+    # Rootless builds cannot chown to unmapped uids, so the home directory is
+    # created host-side (owned by the build user) and fixed up on first boot
+    # by the expand-rootfs hook.
     echo "  Creating user 'ld' ..."
-    run_in_chroot "
-        adduser -D -s /bin/sh -G wheel ld
-        echo 'ld:${ROOT_PASSWORD}' | chpasswd
-        echo '%wheel ALL=(ALL) ALL' > /etc/sudoers.d/wheel
-    "
+    if [[ "${BUILD_PRIVILEGE}" == "root" ]]; then
+        run_rootfs_cmd "
+            adduser -D -u 1000 -s /bin/sh -G wheel ld
+            echo 'ld:${ROOT_PASSWORD}' | chpasswd
+        "
+    else
+        run_rootfs_cmd "
+            adduser -D -H -u 1000 -s /bin/sh -G wheel ld
+            echo 'ld:${ROOT_PASSWORD}' | chpasswd
+        "
+        mkdir -p "${ROOTFS_DIR}/home/ld"
+        if [[ -d "${ROOTFS_DIR}/etc/skel" ]]; then
+            cp -a "${ROOTFS_DIR}/etc/skel/." "${ROOTFS_DIR}/home/ld/"
+        fi
+    fi
+    run_rootfs_cmd "echo '%wheel ALL=(ALL) ALL' > /etc/sudoers.d/wheel"
 
     # ---- Enable sshd ----
     echo "  Enabling sshd ..."
-    run_in_chroot "rc-update add sshd default"
+    run_rootfs_cmd "rc-update add sshd default"
 
     # ---- Allow root password login via SSH ----
     echo "  Configuring SSH root login ..."
@@ -262,7 +279,7 @@ EOF
 
     # ---- Enable essential OpenRC services ----
     echo "  Enabling OpenRC services ..."
-    run_in_chroot "
+    run_rootfs_cmd "
         rc-update add devfs sysinit
         rc-update add dmesg sysinit
         rc-update add mdev sysinit
@@ -285,7 +302,7 @@ EOF
     echo "  Configuring kernel modules to load at boot ..."
     echo "nf_conntrack" >> "${ROOTFS_DIR}/etc/modules"
 
-    # ---- Network interfaces (loopback only) ----
+    # ---- Network interfaces (loopback + eth0 fallback) ----
     echo "  Writing /etc/network/interfaces ..."
     mkdir -p "${ROOTFS_DIR}/etc/network"
     cat > "${ROOTFS_DIR}/etc/network/interfaces" <<EOF
@@ -327,6 +344,27 @@ EOF
 }
 
 # ---------------------------------------------------------------------------
+# GRUB hooks for the host-side grub.cfg renderer
+# ---------------------------------------------------------------------------
+backend_grub_kernel_path() {
+    local kernel
+    kernel=$(ls "${ROOTFS_DIR}/boot/vmlinuz-"* 2>/dev/null | head -1)
+    [[ -n "${kernel}" ]] || return 1
+    echo "/boot/$(basename "${kernel}")"
+}
+
+backend_grub_initrd_path() {
+    local initrd
+    initrd=$(ls "${ROOTFS_DIR}/boot/initramfs-"* 2>/dev/null | head -1)
+    [[ -n "${initrd}" ]] || return 1
+    echo "/boot/$(basename "${initrd}")"
+}
+
+backend_grub_cmdline_extra() {
+    echo "rootfstype=ext4 modules=ext4,sd_mod,vmw_pvscsi,mptspi,mptbase,mptscsih net.ifnames=0 biosdevname=0 nomodeset console=ttyS0,115200n8"
+}
+
+# ---------------------------------------------------------------------------
 # Phase 5 backend: install OpenRC service files
 # ---------------------------------------------------------------------------
 backend_install_landscape_services() {
@@ -346,9 +384,9 @@ backend_install_landscape_services() {
 
     # Enable services
     echo "  Enabling landscape-router service ..."
-    run_in_chroot "rc-update add landscape-router default"
+    run_rootfs_cmd "rc-update add landscape-router default"
     echo "  Enabling local service ..."
-    run_in_chroot "rc-update add local default"
+    run_rootfs_cmd "rc-update add local default"
 }
 
 # =============================================================================
@@ -365,12 +403,7 @@ backend_install_docker() {
     echo "==== Phase 6: Installing Docker (Alpine) ===="
     echo "  Docker packages follow ALPINE_MIRROR=${RESOLVED_ALPINE_MIRROR}"
 
-    # ---- Build-time DNS resolver ----
-    configure_build_resolver
-
-    run_in_chroot_retry 3 5 "
-        apk add docker docker-cli-compose docker-cli-buildx
-    "
+    retry_command 3 5 alpine_apk add docker docker-cli-compose docker-cli-buildx
 
     # Configure Docker daemon
     echo "  Configuring Docker daemon ..."
@@ -384,10 +417,7 @@ EOF
 
     # Enable Docker service
     echo "  Enabling Docker service ..."
-    run_in_chroot "rc-update add docker default"
-
-    # ---- Image default DNS resolver ----
-    configure_image_resolver
+    run_rootfs_cmd "rc-update add docker default"
 
     echo "  Phase 6 complete."
 }
@@ -396,16 +426,12 @@ EOF
 # Phase 7 backend: Alpine-specific cleanup
 # ---------------------------------------------------------------------------
 backend_cleanup() {
-    # Detach the persistent apk cache before cleaning, so `apk cache clean`
-    # cannot wipe the host-side cache used by later rebuilds.
-    umount_apk_cache
-
     # ---- Remove bloated bpftool dependencies ----
     # Alpine's bpftool package pulls in perf → python3 (~31MB), binutils (~10MB),
     # libstdc++, libslang, etc.  apk refuses to remove them (bpftool depends on
     # perf), so we force-delete the files after saving what we need.
     echo "  Removing bloated bpftool dependencies ..."
-    run_in_chroot "
+    run_rootfs_cmd "
         # perf / trace / cpupower / linux-tools (18MB+)
         rm -f /usr/bin/perf /usr/bin/trace /usr/bin/cpupower
         rm -rf /usr/share/perf-core /usr/libexec/perf-core
@@ -441,7 +467,7 @@ backend_cleanup() {
 
     # ---- Rebuild initramfs ----
     echo "  Rebuilding mkinitfs ..."
-    run_in_chroot "
+    run_rootfs_cmd "
         KVER=\$(ls /lib/modules/ 2>/dev/null | grep lts | head -1)
         if [ -z \"\$KVER\" ]; then
             KVER=\$(ls /lib/modules/ | head -1)
@@ -452,10 +478,6 @@ backend_cleanup() {
         rm -f /usr/bin/strings
     "
 
-    # ---- Clean apk cache ----
-    echo "  Cleaning apk cache ..."
-    run_in_chroot "
-        apk cache clean 2>/dev/null || true
-        rm -rf /var/cache/apk/*
-    "
+    # The persistent apk cache lives host-side in CACHE_DIR (no rootfs cleanup
+    # needed; downloaded packages are intentionally kept for faster rebuilds).
 }

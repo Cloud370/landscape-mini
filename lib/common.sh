@@ -5,16 +5,25 @@
 # Sourced by build.sh. Provides common phases shared across all backends.
 # Backend-specific functions (backend_*) are provided by lib/debian.sh or
 # lib/alpine.sh.
+#
+# The build never needs loop devices, partitions, or persistent mounts: the
+# root filesystem is assembled in a plain directory and packed into the disk
+# image offline (mke2fs -d / mtools / sgdisk on image files). Commands that
+# must run inside the rootfs go through a chroot engine:
+#   - chroot  : real root, classic chroot with mounted /proc /sys /dev
+#   - unshare : rootless via `unshare --map-root-user --mount` (default)
+#   - proot   : rootless fallback when user namespaces are unavailable
 # =============================================================================
 
 # ---------------------------------------------------------------------------
-# Cleanup trap - unmount everything and detach loop devices on exit/error
+# Cleanup trap - unmount anything the chroot engine left behind
 # ---------------------------------------------------------------------------
 cleanup() {
     echo ""
-    echo "==== Cleanup: Unmounting and detaching ===="
+    echo "==== Cleanup ===="
 
-    # Unmount in reverse order, ignoring errors
+    # Unmount in reverse order, ignoring errors (only the classic chroot
+    # engine mounts anything outside a private namespace)
     for mp in \
         "${ROOTFS_DIR}/var/cache/apt/archives" \
         "${ROOTFS_DIR}/etc/apk/cache" \
@@ -30,13 +39,281 @@ cleanup() {
         fi
     done
 
-    # Detach loop device
-    if [[ -n "${LOOP_DEV}" && -b "${LOOP_DEV}" ]]; then
-        echo "  Detaching loop device ${LOOP_DEV}"
-        losetup -d "${LOOP_DEV}" 2>/dev/null || true
+    echo "  Cleanup complete."
+}
+
+# ---------------------------------------------------------------------------
+# Privilege / chroot engine detection
+# ---------------------------------------------------------------------------
+BUILD_PRIVILEGE="root"
+CHROOT_ENGINE="chroot"
+
+unshare_engine_functional() {
+    command -v unshare >/dev/null 2>&1 || return 1
+    # Mirror the flags run_rootfs_cmd actually uses so a kernel that allows
+    # mount namespaces but denies PID namespaces fails here, not mid-build.
+    unshare --user --map-root-user --mount --pid --fork --propagation private true >/dev/null 2>&1
+}
+
+# A plain --map-root-user namespace can only represent uid/gid 0, so dpkg
+# chowns to system groups (shadow, crontab, utmp, ...) fail with EINVAL.
+# With /etc/subuid + /etc/subgid delegation and the newuidmap/newgidmap
+# setuid helpers (uidmap package), --map-auto adds the delegated ranges and
+# every guest id below 65536 becomes representable — chroot then runs at
+# native speed with no ownership faking. Cached because the probe forks.
+USERNS_FULL_MAPPING=""
+userns_full_mapping_available() {
+    if [[ -z "${USERNS_FULL_MAPPING}" ]]; then
+        if [[ ${EUID} -eq 0 ]]; then
+            USERNS_FULL_MAPPING="yes"
+        elif command -v newuidmap >/dev/null 2>&1 \
+            && command -v newgidmap >/dev/null 2>&1 \
+            && unshare --user --map-root-user --map-auto -- true >/dev/null 2>&1; then
+            USERNS_FULL_MAPPING="yes"
+        else
+            USERNS_FULL_MAPPING="no"
+        fi
+    fi
+    [[ "${USERNS_FULL_MAPPING}" == "yes" ]]
+}
+
+# Extra unshare flags that widen --map-root-user with the delegated subuid
+# ranges. Both the chroot engine and mkfs must use the same view so that
+# group ids recorded in the ext4 image match what dpkg set in the tree.
+userns_map_args() {
+    if [[ ${EUID} -ne 0 ]] && userns_full_mapping_available; then
+        echo "--map-auto"
+    fi
+}
+
+detect_build_environment() {
+    if [[ ${EUID} -eq 0 ]]; then
+        BUILD_PRIVILEGE="root"
+    else
+        BUILD_PRIVILEGE="rootless"
     fi
 
-    echo "  Cleanup complete."
+    local requested="${BUILD_CHROOT_ENGINE:-auto}"
+
+    case "${BUILD_PRIVILEGE}:${requested}" in
+        root:auto)
+            CHROOT_ENGINE="chroot"
+            ;;
+        root:chroot)
+            CHROOT_ENGINE="chroot"
+            ;;
+        root:unshare)
+            CHROOT_ENGINE="unshare"
+            ;;
+        root:proot)
+            echo "ERROR: BUILD_CHROOT_ENGINE=proot is pointless as root; use chroot or unshare." >&2
+            return 1
+            ;;
+        rootless:chroot)
+            echo "ERROR: BUILD_CHROOT_ENGINE=chroot requires running as root." >&2
+            return 1
+            ;;
+        rootless:auto)
+            if unshare_engine_functional; then
+                CHROOT_ENGINE="unshare"
+            elif command -v proot >/dev/null 2>&1; then
+                CHROOT_ENGINE="proot"
+                echo "[WARN] User namespaces unavailable; falling back to proot (slower)." >&2
+            else
+                echo "ERROR: This build is rootless but no chroot engine is available." >&2
+                echo "  Either enable unprivileged user namespaces (kernel.apparmor_restrict_unprivileged_userns=0" >&2
+                echo "  on Ubuntu 24.04+) or install proot." >&2
+                return 1
+            fi
+            ;;
+        rootless:unshare)
+            if ! unshare_engine_functional; then
+                echo "ERROR: BUILD_CHROOT_ENGINE=unshare requested but user namespaces are not functional." >&2
+                return 1
+            fi
+            CHROOT_ENGINE="unshare"
+            ;;
+        rootless:proot)
+            if ! command -v proot >/dev/null 2>&1; then
+                echo "ERROR: BUILD_CHROOT_ENGINE=proot requested but proot is not installed." >&2
+                return 1
+            fi
+            CHROOT_ENGINE="proot"
+            ;;
+        *)
+            echo "ERROR: Invalid BUILD_CHROOT_ENGINE='${requested}' (auto|chroot|unshare|proot)." >&2
+            return 1
+            ;;
+    esac
+
+    # dpkg maintainer scripts and dpkg --unpack itself set group ownership
+    # (e.g. setgid-shadow unix_chkpwd) that a plain --map-root-user user
+    # namespace cannot represent — those chowns fail with EINVAL
+    # mid-install. With subid delegation (uidmap + /etc/subgid) the
+    # namespace maps every guest id and chroot stays native-speed; proot
+    # (which fakes the chowns) is the fallback when that is unavailable.
+    if [[ "${BUILD_PRIVILEGE}" == "rootless" && "${BASE_SYSTEM:-}" == "debian" \
+          && "${CHROOT_ENGINE}" == "unshare" ]]; then
+        if userns_full_mapping_available; then
+            echo "[INFO] Debian rootless build: chroot runs in a subid-mapped user namespace (native speed)."
+        elif command -v proot >/dev/null 2>&1; then
+            CHROOT_ENGINE="proot"
+            echo "[WARN] Debian rootless build: subid-mapped user namespace unavailable," >&2
+            echo "  falling back to proot (noticeably slower package phases)." >&2
+            [[ "${requested}" != "auto" ]] \
+                && echo "  (your BUILD_CHROOT_ENGINE=${requested} cannot run dpkg here and was overridden.)" >&2
+            echo "  For native speed: sudo apt-get install uidmap and make sure /etc/subgid" >&2
+            echo "  has a delegated range for your user (default for human users on Debian/Ubuntu)." >&2
+        else
+            echo "ERROR: rootless Debian builds need either a subid-mapped user namespace or proot:" >&2
+            echo "  dpkg sets group ownership (shadow/crontab/...) a plain user namespace cannot represent." >&2
+            echo "  Debian/Ubuntu: sudo apt-get install uidmap proot" >&2
+            return 1
+        fi
+    fi
+}
+
+# ---------------------------------------------------------------------------
+# Run a host-side command with root-equivalent filesystem semantics.
+# Rootless builds use a user namespace so files created / chowned by the
+# command land as the invoking user on disk but map to uid 0 inside the image.
+# ---------------------------------------------------------------------------
+# Host-side commands that need a root identity (debootstrap stage 1, apk,
+# ...). Independent of the chroot engine: dpkg inside the tree may need
+# proot, while host-side extraction works best in a plain user namespace
+# (proot's syscall emulation breaks GNU tar's symlink chmod).
+run_as_build_root() {
+    if [[ "${BUILD_PRIVILEGE}" != "rootless" ]]; then
+        "$@"
+        return
+    fi
+
+    if [[ -z "${ROOT_EMULATOR:-}" ]]; then
+        if unshare_engine_functional; then
+            ROOT_EMULATOR="unshare"
+        elif command -v proot >/dev/null 2>&1; then
+            ROOT_EMULATOR="proot"
+        else
+            echo "ERROR: root emulation unavailable: need user namespaces or proot." >&2
+            return 1
+        fi
+    fi
+
+    case "${ROOT_EMULATOR}" in
+        unshare)
+            unshare --user --map-root-user --mount --propagation private -- "$@"
+            ;;
+        proot)
+            # Fake root identity (debootstrap refuses plain users); chowns
+            # are faked, nothing is actually elevated.
+            PROOT_NO_SECCOMP=1 proot -0 "$@"
+            ;;
+    esac
+}
+
+# Commands that specifically need the builder uid mapped to 0 (mkfs -d
+# recording filesystem ownership), regardless of the chroot engine. When a
+# subid-mapped namespace is available it is preferred so tree files whose
+# groups were set through delegated ranges pack with their real image gids.
+run_uid_mapped() {
+    if [[ "${BUILD_PRIVILEGE}" == "rootless" ]]; then
+        # shellcheck disable=SC2046
+        unshare --user --map-root-user $(userns_map_args) -- "$@"
+    else
+        "$@"
+    fi
+}
+
+# ---------------------------------------------------------------------------
+# Engine-aware mount of the special filesystems for the classic chroot engine.
+# unshare/proot engines set them up per invocation instead.
+# ---------------------------------------------------------------------------
+mount_chroot_fs() {
+    [[ "${CHROOT_ENGINE}" == "chroot" ]] || return 0
+
+    echo "  Mounting special filesystems for chroot ..."
+    if ! mountpoint -q "${ROOTFS_DIR}/dev" 2>/dev/null; then
+        mount --bind /dev "${ROOTFS_DIR}/dev"
+    fi
+    if ! mountpoint -q "${ROOTFS_DIR}/dev/pts" 2>/dev/null; then
+        mount --bind /dev/pts "${ROOTFS_DIR}/dev/pts"
+    fi
+    if ! mountpoint -q "${ROOTFS_DIR}/proc" 2>/dev/null; then
+        mount -t proc proc "${ROOTFS_DIR}/proc"
+    fi
+    if ! mountpoint -q "${ROOTFS_DIR}/sys" 2>/dev/null; then
+        mount -t sysfs sysfs "${ROOTFS_DIR}/sys"
+    fi
+}
+
+# ---------------------------------------------------------------------------
+# Helper: unmount special filesystems (classic chroot engine only)
+# ---------------------------------------------------------------------------
+umount_chroot_fs() {
+    [[ "${CHROOT_ENGINE}" == "chroot" ]] || return 0
+
+    echo "  Unmounting special filesystems ..."
+    umount "${ROOTFS_DIR}/var/cache/apt/archives" 2>/dev/null || true
+    umount "${ROOTFS_DIR}/etc/apk/cache" 2>/dev/null || true
+    umount "${ROOTFS_DIR}/proc" 2>/dev/null || true
+    umount "${ROOTFS_DIR}/sys" 2>/dev/null || true
+    umount "${ROOTFS_DIR}/dev/pts" 2>/dev/null || true
+    umount "${ROOTFS_DIR}/dev" 2>/dev/null || true
+}
+
+# ---------------------------------------------------------------------------
+# Run a command inside the rootfs through the active chroot engine
+# ---------------------------------------------------------------------------
+run_rootfs_cmd() {
+    local script="$1"
+
+    case "${CHROOT_ENGINE}" in
+        chroot)
+            chroot "${ROOTFS_DIR}" \
+                /usr/bin/env -i \
+                LANG=C.UTF-8 LC_ALL=C.UTF-8 HOME=/root PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin \
+                "${CHROOT_SHELL}" -c "$1"
+            ;;
+        unshare)
+            ROOTFS_ENGINE_ROOT="${ROOTFS_DIR}" \
+            ROOTFS_ENGINE_SHELL="${CHROOT_SHELL}" \
+            ROOTFS_ENGINE_SCRIPT="${script}" \
+            unshare --user --map-root-user $(userns_map_args) \
+                --mount --pid --fork --propagation private \
+                /bin/bash -c '
+                    set -e
+                    # Prefer a fresh procfs for the private PID namespace; some
+                    # container runtimes (e.g. nested Docker) deny creating a
+                    # new proc instance even with --pid, so fall back to a
+                    # recursive bind of the host /proc.
+                    mount -t proc proc "$ROOTFS_ENGINE_ROOT/proc" 2>/dev/null \
+                        || mount --rbind /proc "$ROOTFS_ENGINE_ROOT/proc"
+                    mount --rbind /dev "$ROOTFS_ENGINE_ROOT/dev"
+                    mount --make-rslave "$ROOTFS_ENGINE_ROOT/dev"
+                    mount --rbind /sys "$ROOTFS_ENGINE_ROOT/sys"
+                    mount --make-rslave "$ROOTFS_ENGINE_ROOT/sys"
+                    exec chroot "$ROOTFS_ENGINE_ROOT" \
+                        /usr/bin/env -i \
+                        LANG=C.UTF-8 LC_ALL=C.UTF-8 HOME=/root PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin \
+                        "$ROOTFS_ENGINE_SHELL" -c "$ROOTFS_ENGINE_SCRIPT"
+                '
+            ;;
+        proot)
+            # PROOT_NO_SECCOMP=1: proot's seccomp-accelerated syscall path
+            # corrupts path translation on hosts with restrictive seccomp
+            # filters (some sandboxes/CI); ptrace-only is slightly slower
+            # but robust everywhere.
+            PROOT_NO_SECCOMP=1 proot -R "${ROOTFS_DIR}" -w / -0 \
+                /usr/bin/env -i \
+                LANG=C.UTF-8 LC_ALL=C.UTF-8 HOME=/root PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin \
+                "${CHROOT_SHELL}" -c "$1"
+            ;;
+    esac
+}
+
+# Backwards-compatible aliases for the pre-engine helper names
+run_in_chroot() {
+    run_rootfs_cmd "$1"
 }
 
 # ---------------------------------------------------------------------------
@@ -44,6 +321,9 @@ cleanup() {
 # ---------------------------------------------------------------------------
 configure_build_resolver() {
     echo "  Preparing build-time /etc/resolv.conf ..."
+    # The tree may not exist yet on the very first build (this runs before
+    # bootstrap creates it).
+    mkdir -p "${ROOTFS_DIR}/etc"
     rm -f "${ROOTFS_DIR}/etc/resolv.conf"
 
     if [[ -s /etc/resolv.conf ]]; then
@@ -63,10 +343,20 @@ configure_image_resolver() {
 }
 
 # ---------------------------------------------------------------------------
-# Helper: run a command inside the chroot
+# Helper: run a command inside the rootfs with retries
 # ---------------------------------------------------------------------------
-run_in_chroot() {
-    LANG=C.UTF-8 LC_ALL=C.UTF-8 chroot "${ROOTFS_DIR}" ${CHROOT_SHELL} -c "$1"
+run_rootfs_cmd_retry() {
+    local max_attempts="${1:-3}"
+    local delay_seconds="${2:-5}"
+    local script="$3"
+
+    retry_command "${max_attempts}" "${delay_seconds}" \
+        run_rootfs_cmd "set -e
+${script}"
+}
+
+run_in_chroot_retry() {
+    run_rootfs_cmd_retry "$1" "$2" "$3"
 }
 
 # ---------------------------------------------------------------------------
@@ -90,19 +380,6 @@ retry_command() {
         echo "WARN: Command failed on attempt ${attempt}, retrying: $*" >&2
         sleep "${delay_seconds}"
     done
-}
-
-# ---------------------------------------------------------------------------
-# Helper: run a command inside chroot with retries
-# ---------------------------------------------------------------------------
-run_in_chroot_retry() {
-    local max_attempts="${1:-3}"
-    local delay_seconds="${2:-5}"
-    local script="$3"
-
-    retry_command "${max_attempts}" "${delay_seconds}" \
-        env LANG=C.UTF-8 LC_ALL=C.UTF-8 chroot "${ROOTFS_DIR}" ${CHROOT_SHELL} -c "set -e
-${script}"
 }
 
 # ---------------------------------------------------------------------------
@@ -519,30 +796,6 @@ resolve_source() {
     echo "  Selected ${source_name}: ${resolved_value}"
 }
 
-# ---------------------------------------------------------------------------
-# Helper: mount special filesystems for chroot
-# ---------------------------------------------------------------------------
-mount_chroot_fs() {
-    echo "  Mounting special filesystems for chroot ..."
-    mount --bind /dev "${ROOTFS_DIR}/dev"
-    mount --bind /dev/pts "${ROOTFS_DIR}/dev/pts"
-    mount -t proc proc "${ROOTFS_DIR}/proc"
-    mount -t sysfs sysfs "${ROOTFS_DIR}/sys"
-}
-
-# ---------------------------------------------------------------------------
-# Helper: unmount special filesystems
-# ---------------------------------------------------------------------------
-umount_chroot_fs() {
-    echo "  Unmounting special filesystems ..."
-    umount "${ROOTFS_DIR}/var/cache/apt/archives" 2>/dev/null || true
-    umount "${ROOTFS_DIR}/etc/apk/cache" 2>/dev/null || true
-    umount "${ROOTFS_DIR}/proc" 2>/dev/null || true
-    umount "${ROOTFS_DIR}/sys" 2>/dev/null || true
-    umount "${ROOTFS_DIR}/dev/pts" 2>/dev/null || true
-    umount "${ROOTFS_DIR}/dev" 2>/dev/null || true
-}
-
 output_format_requested() {
     local requested="$1"
     local format
@@ -593,6 +846,8 @@ topology_source=${EFFECTIVE_TOPOLOGY_SOURCE}
 release_channel=${RELEASE_CHANNEL:-local}
 release_tag=${RELEASE_TAG:-}
 repository_owner=${REPOSITORY_OWNER:-}
+build_privilege=${BUILD_PRIVILEGE}
+chroot_engine=${CHROOT_ENGINE}
 root_password_source=${ROOT_PASSWORD_SOURCE}
 api_username_source=${LANDSCAPE_ADMIN_USER_SOURCE}
 api_password_source=${LANDSCAPE_ADMIN_PASS_SOURCE}
@@ -871,55 +1126,379 @@ phase_download() {
 }
 
 # =============================================================================
-# Phase 2: Create Disk Image
+# Phase 2: Prepare Workspace
 # =============================================================================
+# The disk image itself is assembled offline in Phase 7 from the rootfs
+# directory; this phase only prepares directories and the persistent
+# filesystem identity (UUIDs) used by fstab, initramfs, and grub.cfg.
+# =============================================================================
+IMAGE_LAYOUT_FILE=""
+
+PART3_START_SECTOR=413696
+ESP_START_SECTOR=4096
+ESP_END_SECTOR=413695
+BIOS_EMBED_START_SECTOR=2048
+ESP_SIZE_MB=200
+
+load_image_layout() {
+    IMAGE_LAYOUT_FILE="${WORK_DIR}/image-layout.env"
+
+    if [[ -f "${IMAGE_LAYOUT_FILE}" ]]; then
+        # shellcheck disable=SC1090
+        source "${IMAGE_LAYOUT_FILE}"
+        return 0
+    fi
+
+    ROOT_UUID="$(cat /proc/sys/kernel/random/uuid)"
+    local raw_serial
+    raw_serial="$(cat /proc/sys/kernel/random/uuid)"
+    raw_serial="${raw_serial//-/}"
+    ESP_SERIAL="${raw_serial:0:8}"
+
+    cat > "${IMAGE_LAYOUT_FILE}" <<EOF
+ROOT_UUID=${ROOT_UUID}
+ESP_SERIAL=${ESP_SERIAL}
+EOF
+    echo "  Generated new filesystem identity (ROOT_UUID=${ROOT_UUID})."
+}
+
+# FAT serial numbers are rendered by blkid/mount as UPPERCASE XXXX-XXXX;
+# fstab UUID matching is case-sensitive, so the dash form must be uppercased.
+esp_uuid_pretty() {
+    local serial="${ESP_SERIAL}"
+    echo "${serial:0:4}-${serial:4:4}" | tr 'a-f' 'A-F'
+}
+
 phase_create_image() {
     echo ""
-    echo "==== Phase 2: Creating Disk Image ===="
+    echo "==== Phase 2: Preparing Workspace ===="
 
-    mkdir -p "${OUTPUT_DIR}" "${OUTPUT_METADATA_DIR}" "${ROOTFS_DIR}"
+    mkdir -p "${OUTPUT_DIR}" "${OUTPUT_METADATA_DIR}" "${ROOTFS_DIR}" "${WORK_DIR}"
 
-    # Create raw image (sparse file — no need to write 2GB of zeros)
-    echo "  Creating ${IMAGE_SIZE_MB}MB raw image ..."
-    truncate -s "${IMAGE_SIZE_MB}M" "${IMAGE_FILE}"
+    load_image_layout
 
-    # Partition with GPT: BIOS boot (1-2MiB) + ESP (2-202MiB) + root (202MiB - 100%)
-    echo "  Partitioning (GPT: BIOS + UEFI hybrid) ..."
-    parted -s "${IMAGE_FILE}" \
-        mklabel gpt \
-        mkpart bios 1MiB 2MiB \
-        set 1 bios_grub on \
-        mkpart ESP fat32 2MiB 202MiB \
-        set 2 esp on \
-        mkpart root ext4 202MiB 100%
-
-    # Setup loop device
-    echo "  Setting up loop device ..."
-    LOOP_DEV=$(losetup --show -fP "${IMAGE_FILE}")
-    echo "  Loop device: ${LOOP_DEV}"
-
-    # Wait for partition devices to appear
-    sleep 1
-    partprobe "${LOOP_DEV}" 2>/dev/null || true
-    sleep 1
-
-    # Format partitions (partition 1 = BIOS boot, no filesystem needed)
-    echo "  Formatting EFI partition (FAT32) ..."
-    mkfs.vfat -F32 "${LOOP_DEV}p2"
-
-    echo "  Formatting root partition (ext4, no journal, 1% reserved) ..."
-    mkfs.ext4 -F -O ^has_journal -m 1 "${LOOP_DEV}p3"
-
-    # Mount root
-    echo "  Mounting root filesystem ..."
-    mount "${LOOP_DEV}p3" "${ROOTFS_DIR}"
-
-    # Mount EFI
-    mkdir -p "${ROOTFS_DIR}/boot/efi"
-    echo "  Mounting EFI partition ..."
-    mount "${LOOP_DEV}p2" "${ROOTFS_DIR}/boot/efi"
+    # Remove stale artifacts from earlier builds of this tree
+    rm -f "${WORK_DIR}/rootfs.ext4" "${WORK_DIR}/esp.img"
 
     echo "  Phase 2 complete."
+}
+
+# ---------------------------------------------------------------------------
+# Resume support: later phases operate on the persistent rootfs directory
+# ---------------------------------------------------------------------------
+require_rootfs_tree() {
+    if [[ ! -d "${ROOTFS_DIR}/usr" ]]; then
+        echo "ERROR: Cannot resume from phase ${SKIP_TO_PHASE} - no rootfs tree at ${ROOTFS_DIR}." >&2
+        echo "Run a full build first (work/ persists the rootfs tree between phases)." >&2
+        exit 1
+    fi
+    load_image_layout
+    # Phase 3 recreates the tree from scratch; mounting the special
+    # filesystems first would leave bootstrap's rm -rf hitting busy mounts
+    # (chroot engine), so only resume paths that keep the tree mount them.
+    if [[ ${SKIP_TO_PHASE} -ge 4 ]]; then
+        mount_chroot_fs
+    fi
+}
+
+# ---------------------------------------------------------------------------
+# GRUB configuration rendering (host side, no chroot needed)
+# ---------------------------------------------------------------------------
+render_grub_cfg() {
+    local kernel initrd cmdline
+    kernel="$(backend_grub_kernel_path)"
+    initrd="$(backend_grub_initrd_path)"
+    cmdline="$(backend_grub_cmdline_extra)"
+
+    if [[ -z "${kernel}" || -z "${initrd}" ]]; then
+        echo "ERROR: Could not locate kernel/initrd under ${ROOTFS_DIR}/boot." >&2
+        return 1
+    fi
+
+    mkdir -p "${ROOTFS_DIR}/boot/grub"
+    cat > "${ROOTFS_DIR}/boot/grub/grub.cfg" <<EOF
+serial --speed=115200 --unit=0 --word=8 --parity=no --stop=1
+terminal_input serial console
+terminal_output serial console
+set default=0
+set timeout=3
+
+menuentry 'Landscape GNU/Linux' --class gnu-linux {
+    search --no-floppy --fs-uuid --set=root ${ROOT_UUID}
+    linux ${kernel} root=UUID=${ROOT_UUID} ro ${cmdline}
+    initrd ${initrd}
+}
+EOF
+    echo "  grub.cfg rendered (kernel=${kernel})."
+}
+
+# ---------------------------------------------------------------------------
+# Host GRUB module directories for BIOS core.img / EFI standalone binaries
+# ---------------------------------------------------------------------------
+grub_module_dir() {
+    local platform="$1"
+    local dir
+    for dir in "/usr/lib/grub/${platform}" "/usr/lib/grub/${platform}-efi" "/usr/local/lib/grub/${platform}" "/opt/homebrew/lib/grub/${platform}" "/usr/home/linuxbrew/.linuxbrew/lib/grub/${platform}"; do
+        if [[ -d "${dir}" ]]; then
+            echo "${dir}"
+            return 0
+        fi
+    done
+    return 1
+}
+
+require_grub_modules() {
+    if ! grub_module_dir i386-pc >/dev/null; then
+        echo "ERROR: GRUB i386-pc modules not found (need /usr/lib/grub/i386-pc)." >&2
+        echo "  Debian/Ubuntu: sudo apt-get install grub-pc-bin" >&2
+        echo "  Fedora: sudo dnf install grub2-pc-modules" >&2
+        echo "  Arch: sudo pacman -S grub" >&2
+        return 1
+    fi
+    if ! grub_module_dir x86_64-efi >/dev/null; then
+        echo "ERROR: GRUB x86_64-efi modules not found (need /usr/lib/grub/x86_64-efi)." >&2
+        echo "  Debian/Ubuntu: sudo apt-get install grub-efi-amd64-bin" >&2
+        echo "  Fedora: sudo dnf install grub2-efi-x64-modules" >&2
+        echo "  Arch: sudo pacman -S grub" >&2
+        return 1
+    fi
+}
+
+check_core_deps() {
+    local -a missing=()
+    local cmd
+
+    for cmd in mkfs.vfat mkfs.ext4 e2fsck resize2fs dumpe2fs sgdisk \
+               mmd mcopy grub-mkimage grub-mkstandalone \
+               curl unzip xz rsync truncate; do
+        if ! command -v "${cmd}" >/dev/null 2>&1; then
+            missing+=("${cmd}")
+        fi
+    done
+
+    case "${CHROOT_ENGINE}" in
+        unshare)
+            command -v unshare >/dev/null 2>&1 || missing+=(unshare)
+            ;;
+        proot)
+            command -v proot >/dev/null 2>&1 || missing+=(proot)
+            ;;
+    esac
+
+    if [[ ${#missing[@]} -gt 0 ]]; then
+        echo "ERROR: Required commands not found: ${missing[*]}" >&2
+        echo "" >&2
+        echo "Install the build dependencies for your system:" >&2
+        echo "  Debian/Ubuntu: sudo apt-get install debootstrap dosfstools e2fsprogs gdisk \\" >&2
+        echo "      grub-efi-amd64-bin grub-pc-bin mtools rsync wget curl unzip xz-utils \\" >&2
+        echo "      qemu-utils proot uidmap" >&2
+        echo "  Fedora:         sudo dnf install debootstrap dosfstools e2fsprogs gdisk grub2-efi-x64-modules \\" >&2
+        echo "      grub2-pc-modules mtools rsync curl unzip xz qemu-img" >&2
+        echo "  Arch:           sudo pacman -S debootstrap dosfstools e2fsprogs gdisk grub mtools rsync curl unzip xz qemu-img" >&2
+        echo "" >&2
+        echo "Or run: make deps" >&2
+        return 1
+    fi
+}
+
+# ---------------------------------------------------------------------------
+# Build the EFI System Partition image (vfat, populated with mtools)
+# ---------------------------------------------------------------------------
+build_esp_image() {
+    local esp_img="${WORK_DIR}/esp.img"
+    local efi_staging standalone_dir
+
+    echo "  Building EFI System Partition image ..."
+
+    truncate -s "${ESP_SIZE_MB}M" "${esp_img}"
+    # Serial is set deterministically so the fstab UUID=XXXX-XXXX stays stable
+    mkfs.vfat -F 32 -n ESP -i "${ESP_SERIAL}" "${esp_img}" >/dev/null
+
+    # Standalone EFI GRUB with an embedded early config that locates the
+    # rootfs by UUID and loads the real grub.cfg from (root)/boot/grub.
+    efi_staging="$(mktemp -d)"
+    standalone_dir="${efi_staging}/standalone"
+    mkdir -p "${standalone_dir}/boot/grub"
+
+    cat > "${standalone_dir}/boot/grub/grub.cfg" <<EOF
+search --no-floppy --fs-uuid --set=root ${ROOT_UUID}
+set prefix=(\$root)/boot/grub
+configfile \$prefix/grub.cfg
+EOF
+
+    (
+        cd "${standalone_dir}"
+        # The standalone binary must embed the linux loader itself: the image
+        # ships no /boot/grub/<platform> module directory, so GRUB cannot
+        # auto-load linux.mod at boot time.
+        grub-mkstandalone \
+            --directory="$(grub_module_dir x86_64-efi)" \
+            -O x86_64-efi \
+            -o "${efi_staging}/BOOTX64.EFI" \
+            --modules="part_gpt part_msdos fat ext2 normal configfile echo ls search search_fs_uuid serial terminal test linux" \
+            boot/grub/grub.cfg >/dev/null 2>"${efi_staging}/mkstandalone.err"
+    ) || {
+        echo "ERROR: grub-mkstandalone failed:" >&2
+        cat "${efi_staging}/mkstandalone.err" >&2
+        rm -rf "${efi_staging}"
+        return 1
+    }
+    [[ -s "${efi_staging}/BOOTX64.EFI" ]] || {
+        echo "ERROR: grub-mkstandalone produced no EFI binary:" >&2
+        cat "${efi_staging}/mkstandalone.err" >&2
+        rm -rf "${efi_staging}"
+        return 1
+    }
+    rm -rf "${standalone_dir}"
+
+    mmd -i "${esp_img}" ::/EFI ::/EFI/BOOT
+    mcopy -i "${esp_img}" "${efi_staging}/BOOTX64.EFI" ::/EFI/BOOT/BOOTX64.EFI
+    rm -rf "${efi_staging}"
+
+    echo "  ESP image built: ${esp_img}"
+}
+
+# ---------------------------------------------------------------------------
+# Pack the rootfs directory into a shrunk ext4 filesystem image
+# ---------------------------------------------------------------------------
+build_rootfs_ext4() {
+    local rootfs_img="${WORK_DIR}/rootfs.ext4"
+    local tree_bytes img_bytes
+
+    echo "  Packing rootfs into ext4 image (offline, no mounting) ..."
+
+    # Rootless trees cannot contain device nodes; the running system mounts
+    # devtmpfs on /dev long before they could matter.
+    if [[ "${BUILD_PRIVILEGE}" == "rootless" ]]; then
+        find "${ROOTFS_DIR}" -xdev \( -type b -o -type c -o -type p \) -delete 2>/dev/null || true
+    fi
+
+    # Run du through the mapped namespace: apt drops privileges to _apt, so
+    # cache dirs can be owned by a delegated id the plain builder cannot read.
+    tree_bytes=$(run_uid_mapped du -s --apparent-size -B 1 "${ROOTFS_DIR}" | awk '{print $1}')
+    img_bytes=$(( tree_bytes + tree_bytes / 8 + 67108864 ))
+
+    rm -f "${rootfs_img}"
+    truncate -s "${img_bytes}" "${rootfs_img}"
+
+    run_uid_mapped mkfs.ext4 -q -F \
+        -O ^has_journal -m 1 \
+        -U "${ROOT_UUID}" \
+        -d "${ROOTFS_DIR}" \
+        "${rootfs_img}"
+
+    echo "  Checking and shrinking ext4 image ..."
+    e2fsck -f -y "${rootfs_img}" >/dev/null 2>&1 || true
+    if ! resize2fs -M "${rootfs_img}" >/dev/null 2>&1; then
+        echo "  [WARN] resize2fs -M failed; keeping the unshrunk image (larger file, still valid)." >&2
+    fi
+
+    local root_blocks root_blocksize
+    root_blocks=$(dumpe2fs -h "${rootfs_img}" 2>/dev/null | awk '/^Block count:/{print $3}')
+    root_blocksize=$(dumpe2fs -h "${rootfs_img}" 2>/dev/null | awk '/^Block size:/{print $3}')
+    if [[ -z "${root_blocks}" || -z "${root_blocksize}" ]]; then
+        echo "ERROR: could not read ext4 geometry from ${rootfs_img} (dumpe2fs)." >&2
+        rm -rf "${esp_staging:-/nonexistent}" 2>/dev/null || true
+        return 1
+    fi
+    ROOTFS_BYTES=$(( root_blocks * root_blocksize ))
+    echo "  Rootfs ext4 image: $(( ROOTFS_BYTES / 1048576 )) MB (${root_blocks} blocks @ ${root_blocksize})."
+}
+
+# ---------------------------------------------------------------------------
+# Embed BIOS GRUB (boot.img + core.img) directly into the image file.
+# Mirrors what grub-bios-setup writes, without needing a block device:
+#   - MBR sector 0: first 440 bytes of boot.img, with kernel_sector (offset
+#     0x5c, 8 bytes LE) patched to the LBA of core.img
+#   - BIOS-boot partition (sectors 2048..4095): core.img, with the diskboot
+#     blocklist start (offset 0x1f4, 8 bytes LE) patched to LBA+1
+# ---------------------------------------------------------------------------
+write_le64_at() {
+    local file="$1"
+    local offset="$2"
+    local value="$3"
+
+    printf "$(printf '\\x%02x\\x%02x\\x%02x\\x%02x\\x%02x\\x%02x\\x%02x\\x%02x' \
+        $((value & 0xff)) $(((value >> 8) & 0xff)) $(((value >> 16) & 0xff)) $(((value >> 24) & 0xff)) \
+        $(((value >> 32) & 0xff)) $(((value >> 40) & 0xff)) $(((value >> 48) & 0xff)) $(((value >> 56) & 0xff)))" \
+        | dd of="${file}" bs=1 seek="${offset}" conv=notrunc 2>/dev/null
+}
+
+install_grub_bios() {
+    local image_file="$1"
+    local grub_tmp core_img boot_img core_sectors
+
+    grub_tmp="$(mktemp -d)"
+    core_img="${grub_tmp}/core.img"
+
+    grub-mkimage \
+        --directory="$(grub_module_dir i386-pc)" \
+        -O i386-pc \
+        -o "${core_img}" \
+        -p '(,gpt3)/boot/grub' \
+        biosdisk part_gpt part_msdos ext2 fat normal configfile \
+        echo ls search search_fs_uuid serial terminal test linux \
+        >/dev/null 2>&1
+    if [[ ! -s "${core_img}" ]]; then
+        echo "ERROR: grub-mkimage failed to produce a BIOS core.img." >&2
+        rm -rf "${grub_tmp}"
+        return 1
+    fi
+
+    core_sectors=$(( ( $(stat -c '%s' "${core_img}") + 511 ) / 512 ))
+    if (( core_sectors > ESP_START_SECTOR - BIOS_EMBED_START_SECTOR )); then
+        echo "ERROR: GRUB core.img (${core_sectors} sectors) exceeds the BIOS embed area." >&2
+        rm -rf "${grub_tmp}"
+        return 1
+    fi
+
+    # Patch the diskboot blocklist start (last sector's trailing entry)
+    write_le64_at "${core_img}" 500 $(( BIOS_EMBED_START_SECTOR + 1 ))
+
+    dd if="${core_img}" of="${image_file}" bs=512 seek="${BIOS_EMBED_START_SECTOR}" conv=notrunc 2>/dev/null
+
+    boot_img="${grub_tmp}/boot.img"
+    cp "$(grub_module_dir i386-pc)/boot.img" "${boot_img}"
+    write_le64_at "${boot_img}" 92 "${BIOS_EMBED_START_SECTOR}"
+    dd if="${boot_img}" of="${image_file}" bs=440 count=1 conv=notrunc 2>/dev/null
+
+    rm -rf "${grub_tmp}"
+    echo "  BIOS GRUB embedded (core.img: ${core_sectors} sectors @ LBA ${BIOS_EMBED_START_SECTOR})."
+}
+
+# ---------------------------------------------------------------------------
+# Assemble the final GPT disk image from the offline filesystem images
+# ---------------------------------------------------------------------------
+assemble_disk_image() {
+    local rootfs_img="${WORK_DIR}/rootfs.ext4"
+    local esp_img="${WORK_DIR}/esp.img"
+    local root_sectors part3_end_sector total_sectors total_bytes
+
+    echo "  Assembling final disk image ..."
+
+    root_sectors=$(( ( ROOTFS_BYTES + 511 ) / 512 ))
+    part3_end_sector=$(( PART3_START_SECTOR + root_sectors ))
+    part3_end_sector=$(( ((part3_end_sector + 2047) / 2048) * 2048 - 1 ))
+    total_sectors=$(( part3_end_sector + 1 + 2048 ))
+    total_bytes=$(( total_sectors * 512 ))
+
+    truncate -s "${total_bytes}" "${IMAGE_FILE}"
+
+    sgdisk --zap-all "${IMAGE_FILE}" >/dev/null 2>&1
+    sgdisk \
+        -n 1:${BIOS_EMBED_START_SECTOR}:$(( ESP_START_SECTOR - 1 )) -t 1:EF02 -c 1:bios \
+        -n 2:${ESP_START_SECTOR}:${ESP_END_SECTOR} -t 2:EF00 -c 2:ESP \
+        -n 3:${PART3_START_SECTOR}:${part3_end_sector} -t 3:8300 -c 3:root \
+        "${IMAGE_FILE}" >/dev/null
+
+    dd if="${rootfs_img}" of="${IMAGE_FILE}" bs=512 seek="${PART3_START_SECTOR}" conv=notrunc 2>/dev/null
+    dd if="${esp_img}" of="${IMAGE_FILE}" bs=512 seek="${ESP_START_SECTOR}" conv=notrunc 2>/dev/null
+
+    install_grub_bios "${IMAGE_FILE}"
+
+    rm -f "${rootfs_img}" "${esp_img}"
+
+    echo "  Disk image assembled: ${IMAGE_FILE} ($(( total_bytes / 1048576 )) MB)."
 }
 
 # =============================================================================
@@ -1036,7 +1615,7 @@ phase_cleanup_and_shrink() {
 
     # ---- Remove unneeded kernel modules ----
     echo "  Removing unneeded kernel modules ..."
-    run_in_chroot "
+    run_rootfs_cmd "
         KDIR=\$(ls -d /usr/lib/modules/*/kernel 2>/dev/null | head -1)
         if [ -z \"\$KDIR\" ]; then
             KDIR=\$(ls -d /lib/modules/*/kernel 2>/dev/null | head -1)
@@ -1090,11 +1669,11 @@ phase_cleanup_and_shrink() {
 
     # ---- Generate SSH host keys ----
     echo "  Generating SSH host keys ..."
-    run_in_chroot "ssh-keygen -A"
+    run_rootfs_cmd "ssh-keygen -A"
 
     # ---- Strip all binaries and shared libraries ----
     echo "  Stripping binaries and shared libraries ..."
-    run_in_chroot "
+    run_rootfs_cmd "
         find /usr/bin /usr/sbin /usr/lib -type f \
             \( -name '*.so*' -o -executable \) \
             -exec strip --strip-unneeded {} + 2>/dev/null || true
@@ -1107,12 +1686,17 @@ phase_cleanup_and_shrink() {
     echo "  Truncating udev hardware database ..."
     rm -rf "${ROOTFS_DIR}/usr/lib/udev/hwdb.d" 2>/dev/null || true
     if [[ -f "${ROOTFS_DIR}/usr/lib/udev/hwdb.bin" ]]; then
-        : > "${ROOTFS_DIR}/usr/lib/udev/hwdb.bin"
+        # systemd-hwdb leaves the database read-only (444); root silently
+        # bypasses that, a normal builder needs the write bit restored first.
+        chmod u+w "${ROOTFS_DIR}/usr/lib/udev/hwdb.bin" 2>/dev/null || true
+        if ! : > "${ROOTFS_DIR}/usr/lib/udev/hwdb.bin" 2>/dev/null; then
+            echo "  [WARN] could not truncate hwdb.bin; image keeps the full database" >&2
+        fi
     fi
 
     # ---- General cleanup ----
     echo "  Cleaning caches and unnecessary files ..."
-    run_in_chroot "
+    run_rootfs_cmd "
         rm -rf /usr/share/doc/*
         rm -rf /usr/share/man/*
         rm -rf /usr/share/info/*
@@ -1122,71 +1706,20 @@ phase_cleanup_and_shrink() {
         rm -f /var/log/*.log
         rm -rf /tmp/*
         rm -rf /var/tmp/*
+        rm -rf /var/log/journal
     "
 
-    # Unmount special filesystems
+    # ---- Unmount special filesystems (classic chroot engine only) ----
     umount_chroot_fs
 
-    # Unmount EFI partition
-    echo "  Unmounting EFI partition ..."
-    umount "${ROOTFS_DIR}/boot/efi" 2>/dev/null || true
+    # ---- Render final grub.cfg ----
+    render_grub_cfg
 
-    # ---- Clean journal AFTER special fs unmounted ----
-    echo "  Cleaning journal logs ..."
-    rm -rf "${ROOTFS_DIR}/var/log/journal"
-
-    # Unmount root BEFORE e2fsck/resize2fs
-    echo "  Unmounting root filesystem ..."
-    umount "${ROOTFS_DIR}" 2>/dev/null || true
-
-    # Shrink the ext4 filesystem
-    echo "  Running filesystem check ..."
-    e2fsck -f -y "${LOOP_DEV}p3" || true
-
-    echo "  Shrinking ext4 filesystem to minimum size ..."
-    resize2fs -M "${LOOP_DEV}p3"
-
-    # Get the actual filesystem size after shrink
-    echo "  Calculating final image size ..."
-    local ROOT_BLOCKS ROOT_BLOCKSIZE ROOT_BYTES
-    ROOT_BLOCKS=$(dumpe2fs -h "${LOOP_DEV}p3" 2>/dev/null | grep "Block count:" | awk '{print $3}')
-    ROOT_BLOCKSIZE=$(dumpe2fs -h "${LOOP_DEV}p3" 2>/dev/null | grep "Block size:" | awk '{print $3}')
-    ROOT_BYTES=$(( ROOT_BLOCKS * ROOT_BLOCKSIZE ))
-
-    # Detach loop device first (before modifying partition table)
-    echo "  Detaching loop device ..."
-    losetup -d "${LOOP_DEV}"
-    LOOP_DEV=""
-
-    # Partition 3 starts at sector 413696 (202MiB = 211812352 bytes / 512)
-    local PART3_START_SECTOR=413696
-    local ROOT_SECTORS=$(( ROOT_BYTES / 512 ))
-    local PART3_END_SECTOR=$(( PART3_START_SECTOR + ROOT_SECTORS ))
-    PART3_END_SECTOR=$(( ((PART3_END_SECTOR + 2047) / 2048) * 2048 - 1 ))
-    local TOTAL_SECTORS=$(( PART3_END_SECTOR + 1 + 2048 ))
-    local TOTAL_BYTES=$(( TOTAL_SECTORS * 512 ))
-
-    # Save GRUB i386-pc boot code from MBR
-    echo "  Saving GRUB MBR boot code ..."
-    dd if="${IMAGE_FILE}" of="${IMAGE_FILE}.mbr" bs=440 count=1 2>/dev/null
-
-    # Truncate the image to the new size
-    echo "  Truncating image to $(( TOTAL_BYTES / 1048576 )) MB ..."
-    truncate -s "${TOTAL_BYTES}" "${IMAGE_FILE}"
-
-    # Wipe all GPT/MBR structures, then recreate clean GPT
-    echo "  Rebuilding GPT partition table ..."
-    sgdisk --zap-all "${IMAGE_FILE}" >/dev/null 2>&1
-    sgdisk \
-        -n 1:2048:4095 -t 1:EF02 -c 1:bios \
-        -n 2:4096:413695 -t 2:EF00 -c 2:ESP \
-        -n 3:${PART3_START_SECTOR}:${PART3_END_SECTOR} -t 3:8300 \
-        "${IMAGE_FILE}"
-
-    # Restore GRUB i386-pc boot code to MBR
-    echo "  Restoring GRUB MBR boot code ..."
-    dd if="${IMAGE_FILE}.mbr" of="${IMAGE_FILE}" bs=440 count=1 conv=notrunc 2>/dev/null
-    rm -f "${IMAGE_FILE}.mbr"
+    # ---- Assemble the offline disk image ----
+    require_grub_modules
+    build_rootfs_ext4
+    build_esp_image
+    assemble_disk_image
 
     output_format_requested vmdk && export_vmdk
     output_format_requested ova && export_ova
@@ -1265,22 +1798,5 @@ phase_report() {
 }
 
 # =============================================================================
-# Helper: Re-attach existing image for resumed builds
+# Helper: Validate rootfs tree for resumed builds (mounts handled by engine)
 # =============================================================================
-resume_from_image() {
-    if [[ ! -f "${IMAGE_FILE}" ]]; then
-        echo "ERROR: Cannot skip to phase ${SKIP_TO_PHASE} - image file not found: ${IMAGE_FILE}"
-        echo "Run a full build first, or skip to an earlier phase."
-        exit 1
-    fi
-    echo "  Re-attaching existing image for phase ${SKIP_TO_PHASE} ..."
-    LOOP_DEV=$(losetup --show -fP "${IMAGE_FILE}")
-    sleep 1
-    partprobe "${LOOP_DEV}" 2>/dev/null || true
-    sleep 1
-    mkdir -p "${ROOTFS_DIR}"
-    mount "${LOOP_DEV}p3" "${ROOTFS_DIR}"
-    mkdir -p "${ROOTFS_DIR}/boot/efi"
-    mount "${LOOP_DEV}p2" "${ROOTFS_DIR}/boot/efi"
-    mount_chroot_fs
-}

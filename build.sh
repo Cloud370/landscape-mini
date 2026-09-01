@@ -10,6 +10,14 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 BUILD_ENV_PROFILE="${BUILD_ENV_PROFILE:-}"
 
+# Rootless shells often lack the sbin directories where mkfs/e2fsck/sgdisk
+# live; add the conventional locations so the build works from any login.
+for _sbin_dir in /usr/local/sbin /usr/sbin /sbin; do
+    [[ -d "${_sbin_dir}" && ":${PATH}:" != *":${_sbin_dir}:"* ]] && PATH="${PATH}:${_sbin_dir}"
+done
+unset _sbin_dir
+export PATH
+
 # Supported config variables whose explicit shell environment should override
 # layered env files such as build.env.<profile> and build.env.local.
 declare -a CONFIG_ENV_KEYS=(
@@ -403,15 +411,8 @@ normalize_output_formats
 normalize_run_test_selection
 
 # ---------------------------------------------------------------------------
-# Must run as root
-# ---------------------------------------------------------------------------
-if [[ ${EUID} -ne 0 ]]; then
-    echo "ERROR: This script must be run as root (use sudo)."
-    exit 1
-fi
-
-# ---------------------------------------------------------------------------
-# Source shared library and backend
+# Source shared library and backend, then detect the privilege model
+# (root with classic chroot, or rootless via unshare/proot)
 # ---------------------------------------------------------------------------
 source "${SCRIPT_DIR}/lib/common.sh"
 
@@ -428,6 +429,10 @@ case "${BASE_SYSTEM}" in
         ;;
 esac
 
+detect_build_environment
+check_core_deps
+backend_check_deps
+
 # ---------------------------------------------------------------------------
 # Variables
 # ---------------------------------------------------------------------------
@@ -436,7 +441,6 @@ OUTPUT_DIR="${OUTPUT_DIR:-$(pwd)/output}"
 OUTPUT_METADATA_DIR="${OUTPUT_DIR}/metadata"
 ROOTFS_DIR="${WORK_DIR}/rootfs"
 CACHE_DIR="${CACHE_DIR:-${SCRIPT_DIR}/.cache}"
-LOOP_DEV=""
 SOURCE_PROBE_TIMEOUT="${SOURCE_PROBE_TIMEOUT:-5}"
 SOURCE_FAILOVER_TIMEOUT="${SOURCE_FAILOVER_TIMEOUT:-120}"
 
@@ -598,10 +602,11 @@ should_resolve_sources() {
 # ---------------------------------------------------------------------------
 # Setup trap
 # ---------------------------------------------------------------------------
-trap cleanup EXIT ERR
+# EXIT alone: on a failing command under `set -e`, ERR would fire first and
+# EXIT right after, running cleanup twice for one failure.
+trap cleanup EXIT
 
 main() {
-    backend_check_deps
     prepare_effective_topology_config
 
     if should_resolve_sources; then
@@ -641,6 +646,7 @@ main() {
     echo "  Config Profile    : ${EFFECTIVE_CONFIG_PROFILE}"
     echo "  Topology Source   : ${EFFECTIVE_TOPOLOGY_SOURCE}"
     echo "  Run Test          : ${RUN_TEST}"
+    echo "  Privilege         : ${BUILD_PRIVILEGE} (engine: ${CHROOT_ENGINE})"
     if [[ -n "${EFFECTIVE_CONFIG_PATH}" ]]; then
         echo "  Effective Config  : ${EFFECTIVE_CONFIG_PATH}"
     fi
@@ -651,8 +657,8 @@ main() {
         echo ""
         echo "==== Resuming from Phase ${SKIP_TO_PHASE} ===="
         echo "  Phase 1: Download      | Phase 5: Install Landscape"
-        echo "  Phase 2: Create Image  | Phase 6: Install Docker"
-        echo "  Phase 3: Bootstrap     | Phase 7: Cleanup & Export"
+        echo "  Phase 2: Prepare Tree  | Phase 6: Install Docker"
+        echo "  Phase 3: Bootstrap     | Phase 7: Cleanup & Assemble"
         echo "  Phase 4: Configure     | Phase 8: Report"
     fi
 
@@ -660,8 +666,8 @@ main() {
 
     if [[ ${SKIP_TO_PHASE} -le 2 ]]; then
         phase_create_image
-    elif [[ ${SKIP_TO_PHASE} -le 7 ]]; then
-        resume_from_image
+    else
+        require_rootfs_tree
     fi
 
     [[ ${SKIP_TO_PHASE} -le 3 ]] && backend_bootstrap

@@ -56,4 +56,4 @@ jobs:
       landscape_version: ${{ github.event.inputs.landscape_version || '' }}
       compress_output: no
       release_channel: public-ci
-      build_timeout_minutes: 4
+      build_timeout_minutes: 20

@@ -5,7 +5,8 @@
 # Builds a minimal x86 UEFI image for the Landscape Router.
 # Supports Debian and Alpine base systems, optional Docker, and multiple
 # output formats.
-# The main build script (build.sh) requires root/sudo.
+# The main build script (build.sh) runs rootless by default (user namespaces)
+# and also works as root.
 #
 # Usage:
 #   make              - Show all available targets
@@ -29,9 +30,9 @@
 empty :=
 space := $(empty) $(empty)
 comma := ,
-BUILD_ENV_VARS := BUILD_ENV_PROFILE BASE_SYSTEM INCLUDE_DOCKER OUTPUT_FORMATS LANDSCAPE_VERSION ROOT_PASSWORD LANDSCAPE_ADMIN_USER LANDSCAPE_ADMIN_PASS LANDSCAPE_LAN_SERVER_IP LANDSCAPE_LAN_RANGE_START LANDSCAPE_LAN_RANGE_END LANDSCAPE_LAN_NETMASK RUN_TEST EFFECTIVE_CONFIG_PATH EFFECTIVE_CONFIG_PROFILE EFFECTIVE_TOPOLOGY_SOURCE APT_MIRROR ALPINE_MIRROR DOCKER_APT_MIRROR DOCKER_APT_GPG_URL SOURCE_PROBE_TIMEOUT COMPRESS_OUTPUT LANDSCAPE_REPO IMAGE_SIZE_MB DEBIAN_RELEASE ALPINE_RELEASE TIMEZONE LOCALE EXTRA_LOCALES WORK_DIR OUTPUT_DIR CACHE_DIR LANDSCAPE_TEST_LOG_DIR SSH_PORT WEB_PORT LANDSCAPE_CONTROL_PORT QEMU_MEM QEMU_SMP MCAST_ADDR MCAST_PORT ROUTER_WAN_MAC ROUTER_LAN_MAC CLIENT_MAC
+BUILD_ENV_VARS := BUILD_ENV_PROFILE BASE_SYSTEM INCLUDE_DOCKER OUTPUT_FORMATS LANDSCAPE_VERSION ROOT_PASSWORD LANDSCAPE_ADMIN_USER LANDSCAPE_ADMIN_PASS LANDSCAPE_LAN_SERVER_IP LANDSCAPE_LAN_RANGE_START LANDSCAPE_LAN_RANGE_END LANDSCAPE_LAN_NETMASK RUN_TEST EFFECTIVE_CONFIG_PATH EFFECTIVE_CONFIG_PROFILE EFFECTIVE_TOPOLOGY_SOURCE APT_MIRROR ALPINE_MIRROR DOCKER_APT_MIRROR DOCKER_APT_GPG_URL SOURCE_PROBE_TIMEOUT COMPRESS_OUTPUT LANDSCAPE_REPO IMAGE_SIZE_MB DEBIAN_RELEASE ALPINE_RELEASE TIMEZONE LOCALE EXTRA_LOCALES WORK_DIR OUTPUT_DIR CACHE_DIR BUILD_CHROOT_ENGINE LANDSCAPE_TEST_LOG_DIR SSH_PORT WEB_PORT LANDSCAPE_CONTROL_PORT QEMU_MEM QEMU_SMP MCAST_ADDR MCAST_PORT ROUTER_WAN_MAC ROUTER_LAN_MAC CLIENT_MAC
 BUILD_PRESERVE_ENV := $(subst $(space),$(comma),$(strip $(BUILD_ENV_VARS)))
-OVMF := /usr/share/ovmf/OVMF.fd
+OVMF ?= $(shell ./tests/ovmf-path.sh 2>/dev/null || echo /usr/share/ovmf/OVMF.fd)
 WORK_DIR ?= work
 OUTPUT_DIR ?= output
 CACHE_DIR ?= .cache
@@ -111,9 +112,10 @@ help: ## Show all available targets with descriptions
 
 deps: ## Install all host dependencies needed for building
 	sudo apt-get update
-	sudo apt-get install -y debootstrap parted dosfstools e2fsprogs \
-		grub-efi-amd64-bin grub-pc-bin qemu-utils qemu-system-x86 ovmf \
-		rsync curl gdisk unzip xz-utils
+	sudo apt-get install -y debootstrap dosfstools e2fsprogs gdisk \
+		grub-efi-amd64-bin grub-pc-bin mtools rsync wget \
+		qemu-utils qemu-system-x86 ovmf \
+		curl unzip xz-utils proot uidmap
 
 deps-test: ## Install test dependencies (sshpass, socat, curl, jq)
 	sudo apt-get update
@@ -124,7 +126,7 @@ deps-test: ## Install test dependencies (sshpass, socat, curl, jq)
 # --------------------------------------------------------------------------
 
 build: ## Build image with layered env files plus explicit overrides
-	sudo --preserve-env=$(BUILD_PRESERVE_ENV) ./build.sh
+	./build.sh
 
 test: ## Run readiness checks on the current raw image
 	@image_path="$(resolve_image_path)"; \
@@ -177,14 +179,14 @@ ssh: ## SSH into the running QEMU instance
 # Cleanup targets
 # --------------------------------------------------------------------------
 
-clean: ## Remove work directory (requires sudo)
-	sudo rm -rf $(WORK_DIR)/
+clean: ## Remove work directory
+	rm -rf $(WORK_DIR)/ 2>/dev/null || sudo rm -rf $(WORK_DIR)/
 
-distclean: ## Remove work and output directories (requires sudo)
-	sudo rm -rf $(WORK_DIR)/ $(OUTPUT_DIR)/
+distclean: ## Remove work and output directories
+	rm -rf $(WORK_DIR)/ $(OUTPUT_DIR)/ 2>/dev/null || sudo rm -rf $(WORK_DIR)/ $(OUTPUT_DIR)/
 
-cache-clean: ## Remove the persistent download/package cache (requires sudo)
-	sudo rm -rf $(CACHE_DIR)/
+cache-clean: ## Remove the persistent download/package cache
+	rm -rf $(CACHE_DIR)/ 2>/dev/null || sudo rm -rf $(CACHE_DIR)/
 
 # --------------------------------------------------------------------------
 # Status / Info
