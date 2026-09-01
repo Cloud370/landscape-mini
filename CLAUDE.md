@@ -49,8 +49,10 @@ make ssh
 - `configs/landscape_init.toml` is version-coupled to `LANDSCAPE_VERSION`: upstream (>= v0.19)
   enforces an exact `version` field and the static NAT table layout changed in v0.24.
   `build.sh` pins the `version` field automatically from the resolved landscape version
-  (`latest` is resolved to a concrete tag first); pinning older upstream versions requires
-  matching the init config by hand.
+  (`latest` is resolved to a concrete tag first). Pinning a pre-v0.24 version fails the
+  build if the config still uses `static_nat_mappings_v4/v6` (silently dropped by old
+  binaries) and warns otherwise — downgrade the config to the old `[[static_nat_mappings]]`
+  format by hand.
 - Default Linux login:
   - `root` / `landscape`
   - `ld` / `landscape`

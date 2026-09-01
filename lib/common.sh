@@ -345,6 +345,41 @@ ensure_init_config_version() {
 }
 
 # ---------------------------------------------------------------------------
+# Helper: guard against pinning a pre-v0.24 landscape binary together with a
+# v0.24-schema init config. Pre-v0.24 binaries silently drop the
+# static_nat_mappings_v4/v6 tables (DHCP/SSH/WUI port mappings lost), so fail
+# the build for that combination and warn on other downgrade paths where
+# compatibility cannot be verified.
+# Returns 0 (compatible or warn-only), 1 on definite incompatibility.
+# ---------------------------------------------------------------------------
+check_init_config_schema_compat() {
+    local config_file="$1"
+    local pinned="${RESOLVED_LANDSCAPE_VERSION:-${LANDSCAPE_VERSION:-latest}}"
+    pinned="${pinned#v}"
+
+    local major minor
+    if ! [[ "${pinned}" =~ ^([0-9]+)\.([0-9]+) ]]; then
+        # "latest" or otherwise unparseable: nothing decisive to check.
+        return 0
+    fi
+    major="${BASH_REMATCH[1]}"
+    minor="${BASH_REMATCH[2]}"
+    if (( major > 0 || minor >= 24 )); then
+        return 0
+    fi
+
+    if grep -Eq '^[[:space:]]*\[\[?static_nat_mappings_v[46]' "${config_file}"; then
+        echo "  [ERROR] LANDSCAPE_VERSION=${pinned} predates the v0.24 config schema, but ${config_file} uses static_nat_mappings_v4/v6 tables." >&2
+        echo "          Pre-v0.24 binaries silently drop those tables, losing the DHCP/SSH/WUI port mappings." >&2
+        echo "          Pin a v0.24+ release, or hand-migrate the config to the old [[static_nat_mappings]] format (see CLAUDE.md)." >&2
+        return 1
+    fi
+
+    echo "  [WARN] LANDSCAPE_VERSION=v${pinned} predates the v0.24 config schema; make sure the init config matches that version's expected format." >&2
+    return 0
+}
+
+# ---------------------------------------------------------------------------
 # Helper: verify a cached/downloaded file against SHASUM256sum.txt
 # Returns 0 (ok or skipped), 1 on mismatch.
 # ---------------------------------------------------------------------------
@@ -927,6 +962,9 @@ phase_install_landscape() {
             cp "${landscape_init_source}" "${staged_init}"
         fi
         ensure_init_config_version "${staged_init}"
+        if ! check_init_config_schema_compat "${staged_init}"; then
+            return 1
+        fi
         cp "${staged_init}" "${ROOTFS_DIR}/root/.landscape-router/landscape_init.toml"
     else
         echo "  [SKIP] No landscape_init.toml found (will use --auto mode)."

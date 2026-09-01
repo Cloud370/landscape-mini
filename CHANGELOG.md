@@ -9,6 +9,7 @@ This file currently tracks unreleased work and recent notable changes.
 
 - Add a persistent local build cache (`.cache/`, override via `CACHE_DIR`) that survives `make clean`: landscape release assets are cached per resolved version and verified against upstream `SHASUM256sum.txt`, and Debian apt / Alpine apk package archives are reused across rebuilds; CI reuses the download cache via `actions/cache`, and `make cache-clean` purges it / 新增本地持久化构建缓存（`.cache/`，可用 `CACHE_DIR` 覆盖），`make clean` 不再清空缓存：Landscape 发行包按解析后的版本缓存并用上游 `SHASUM256sum.txt` 校验，Debian apt 与 Alpine apk 包归档在重复构建时复用；CI 通过 `actions/cache` 复用下载缓存，并提供 `make cache-clean` 彻底清空
 - Resolve `LANDSCAPE_VERSION=latest` to a concrete release tag at build start so downloads stay cacheable and reproducible / 构建开始时将 `LANDSCAPE_VERSION=latest` 解析为具体 release tag，使下载可缓存、可复现
+- Guard against pinning a pre-v0.24 landscape binary together with a v0.24-schema init config: the build now fails when the config still uses `static_nat_mappings_v4/v6` tables (silently dropped by old binaries, losing DHCP/SSH/WUI port mappings) and warns on other downgrade paths / 增加旧版本固定与 v0.24 配置结构组合的防护：配置仍使用 `static_nat_mappings_v4/v6` 时直接构建失败（老二进制会静默丢弃这些表，丢失 DHCP/SSH/WUI 端口映射），其余降级路径给出警告
 
 ### Changed / 变更
 
