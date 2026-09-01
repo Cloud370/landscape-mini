@@ -53,6 +53,10 @@ backend_bootstrap() {
     # the retry wrapper and a rebuild after a failed build must start clean;
     # otherwise extraction dies on "File exists" residue.
     bootstrap_once() {
+        # Defensive: a SIGKILLed previous chroot-engine run can leave
+        # debootstrap's self-mounted /proc behind, which would make the
+        # wipe below fail with EBUSY inside the retry (silently).
+        umount_chroot_fs
         rm -rf "${ROOTFS_DIR}"
         mkdir -p "${ROOTFS_DIR}"
         run_as_build_root \

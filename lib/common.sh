@@ -215,12 +215,19 @@ run_as_build_root() {
 # recording filesystem ownership), regardless of the chroot engine. When a
 # subid-mapped namespace is available it is preferred so tree files whose
 # groups were set through delegated ranges pack with their real image gids.
+# On hosts without user namespaces at all, proot -0 presents the
+# single-owner tree as uid 0, which is all mkfs -d needs there.
 run_uid_mapped() {
-    if [[ "${BUILD_PRIVILEGE}" == "rootless" ]]; then
+    if [[ "${BUILD_PRIVILEGE}" != "rootless" ]]; then
+        "$@"
+    elif unshare_engine_functional; then
         # shellcheck disable=SC2046
         unshare --user --map-root-user $(userns_map_args) -- "$@"
+    elif command -v proot >/dev/null 2>&1; then
+        PROOT_NO_SECCOMP=1 proot -0 "$@"
     else
-        "$@"
+        echo "ERROR: cannot present the rootfs as root-owned: need user namespaces or proot." >&2
+        return 1
     fi
 }
 
@@ -1398,7 +1405,6 @@ build_rootfs_ext4() {
     root_blocksize=$(dumpe2fs -h "${rootfs_img}" 2>/dev/null | awk '/^Block size:/{print $3}')
     if [[ -z "${root_blocks}" || -z "${root_blocksize}" ]]; then
         echo "ERROR: could not read ext4 geometry from ${rootfs_img} (dumpe2fs)." >&2
-        rm -rf "${esp_staging:-/nonexistent}" 2>/dev/null || true
         return 1
     fi
     ROOTFS_BYTES=$(( root_blocks * root_blocksize ))
