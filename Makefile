@@ -113,7 +113,7 @@ deps: ## Install all host dependencies needed for building
 	sudo apt-get update
 	sudo apt-get install -y debootstrap parted dosfstools e2fsprogs \
 		grub-efi-amd64-bin grub-pc-bin qemu-utils qemu-system-x86 ovmf \
-		rsync curl gdisk unzip
+		rsync curl gdisk unzip xz-utils
 
 deps-test: ## Install test dependencies (sshpass, socat, curl, jq)
 	sudo apt-get update

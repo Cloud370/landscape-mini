@@ -12,7 +12,7 @@ CHROOT_SHELL="/bin/bash"
 # Check host dependencies for Debian builds
 # ---------------------------------------------------------------------------
 backend_check_deps() {
-    for cmd in debootstrap parted losetup mkfs.vfat mkfs.ext4 blkid e2fsck resize2fs curl unzip sgdisk; do
+    for cmd in debootstrap parted losetup mkfs.vfat mkfs.ext4 blkid e2fsck resize2fs curl unzip xz sgdisk; do
         if ! command -v "${cmd}" &>/dev/null; then
             echo "ERROR: Required command '${cmd}' not found. Please install it first."
             exit 1

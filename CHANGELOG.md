@@ -17,6 +17,7 @@ This file currently tracks unreleased work and recent notable changes.
 
 ### Fixed / 修复
 
+- Declare `xz-utils` as a build dependency (`make deps` plus the Debian backend dependency check): the APT mirror probe silently requires the `xz` binary to parse `Packages.xz`, and on minimal hosts without it every mirror was misreported as unhealthy / 将 `xz-utils` 声明为构建依赖（`make deps` 与 Debian 后端依赖检查）：APT 镜像源探测静默依赖 `xz` 二进制解析 `Packages.xz`，精简主机缺失时所有镜像会被误判为不可用
 - Improve Custom Build result UX by rendering table-based workflow summaries, adding copy-ready latest/history direct links, and publishing both a stable `custom-build-latest` entry plus immutable per-build `custom-build-<artifact_id>` releases / 优化 Custom Build 结果体验：将 workflow summary 改为表格展示，补充可直接复制的 latest/history 直链，并同时发布稳定入口 `custom-build-latest` 与按构建保留的不可变 `custom-build-<artifact_id>` release
 - Clarify Custom Build documentation around latest vs immutable history retrieval so fork users can distinguish moving pointers from exact-build download pages more easily / 更新 Custom Build 文档，明确区分 latest 固定入口与不可变历史入口，方便 fork 用户更直接地获取精确构建页面和下载链接
 - Update the readiness helper's static NAT API path to the v0.24 `/api/v1/nat/static_mappings/v4` endpoint / 将 readiness 辅助函数的静态 NAT API 路径更新为 v0.24 的 `/api/v1/nat/static_mappings/v4` 端点
