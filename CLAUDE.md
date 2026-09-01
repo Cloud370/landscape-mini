@@ -45,7 +45,12 @@ make ssh
 
 ## Defaults and important inputs
 
-- Default upstream version comes from `build.env` (`LANDSCAPE_VERSION`, currently `v0.18.2`)
+- Default upstream version comes from `build.env` (`LANDSCAPE_VERSION`, currently `v0.24.2`)
+- `configs/landscape_init.toml` is version-coupled to `LANDSCAPE_VERSION`: upstream (>= v0.19)
+  enforces an exact `version` field and the static NAT table layout changed in v0.24.
+  `build.sh` pins the `version` field automatically from the resolved landscape version
+  (`latest` is resolved to a concrete tag first); pinning older upstream versions requires
+  matching the init config by hand.
 - Default Linux login:
   - `root` / `landscape`
   - `ld` / `landscape`
@@ -62,6 +67,7 @@ make ssh
   - `APT_MIRROR`
   - `ALPINE_MIRROR`
   - `COMPRESS_OUTPUT`
+  - `CACHE_DIR` (persistent build cache, default `.cache/`, survives `make clean`)
 
 ## Build and test contract
 

@@ -39,6 +39,19 @@ backend_bootstrap() {
     echo "  Phase 3 complete."
 }
 
+# ---------------------------------------------------------------------------
+# Persistent apt archive cache (host-side, survives `make clean`)
+# ---------------------------------------------------------------------------
+setup_apt_cache_mount() {
+    mkdir -p "${CACHE_DIR}/apt/partial" "${ROOTFS_DIR}/var/cache/apt/archives"
+    mount --bind "${CACHE_DIR}/apt" "${ROOTFS_DIR}/var/cache/apt/archives"
+    echo "  Apt archive cache mounted: ${CACHE_DIR}/apt"
+}
+
+umount_apt_cache() {
+    umount "${ROOTFS_DIR}/var/cache/apt/archives" 2>/dev/null || true
+}
+
 # =============================================================================
 # Phase 4: Configure System (Debian)
 # =============================================================================
@@ -48,6 +61,9 @@ backend_configure() {
 
     # Mount bind filesystems for chroot
     mount_chroot_fs
+
+    # Persistent package cache for faster rebuilds
+    setup_apt_cache_mount
 
     # ---- APT sources.list ----
     echo "  Writing /etc/apt/sources.list ..."
@@ -455,6 +471,10 @@ EOF
 # Phase 7 backend: Debian-specific cleanup
 # ---------------------------------------------------------------------------
 backend_cleanup() {
+    # Detach the persistent apt cache before cleaning, so `apt-get clean`
+    # cannot wipe the host-side cache used by later rebuilds.
+    umount_apt_cache
+
     # ---- Rebuild initramfs with fewer modules ----
     echo "  Rebuilding smaller initramfs ..."
     run_in_chroot "

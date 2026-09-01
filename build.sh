@@ -52,6 +52,7 @@ declare -a CONFIG_ENV_KEYS=(
     REPOSITORY_OWNER
     SOURCE_PROBE_TIMEOUT
     SOURCE_FAILOVER_TIMEOUT
+    CACHE_DIR
 )
 declare -A EXPLICIT_ENV_VALUES=()
 declare -A EXPLICIT_ENV_IS_SET=()
@@ -277,6 +278,7 @@ prepare_effective_topology_config() {
 
     mkdir -p "${OUTPUT_METADATA_DIR}"
     bash "${SCRIPT_DIR}/.github/scripts/render-effective-topology.sh" "${OUTPUT_METADATA_DIR}/effective-landscape_init.toml"
+    ensure_init_config_version "${OUTPUT_METADATA_DIR}/effective-landscape_init.toml"
     EFFECTIVE_CONFIG_PATH="${OUTPUT_METADATA_DIR}/effective-landscape_init.toml"
 
     if [[ "${EFFECTIVE_TOPOLOGY_SOURCE}" == "default" ]]; then
@@ -433,10 +435,24 @@ WORK_DIR="${WORK_DIR:-$(pwd)/work}"
 OUTPUT_DIR="${OUTPUT_DIR:-$(pwd)/output}"
 OUTPUT_METADATA_DIR="${OUTPUT_DIR}/metadata"
 ROOTFS_DIR="${WORK_DIR}/rootfs"
-DOWNLOAD_DIR="${WORK_DIR}/downloads/${LANDSCAPE_VERSION}"
+CACHE_DIR="${CACHE_DIR:-${SCRIPT_DIR}/.cache}"
 LOOP_DEV=""
 SOURCE_PROBE_TIMEOUT="${SOURCE_PROBE_TIMEOUT:-5}"
 SOURCE_FAILOVER_TIMEOUT="${SOURCE_FAILOVER_TIMEOUT:-120}"
+
+# Resolve "latest" to a concrete release tag so downloads stay cacheable and
+# the init config version field can be pinned (upstream requires an exact
+# match since v0.19).
+resolve_landscape_release_version
+RESOLVED_LANDSCAPE_VERSION="${RESOLVED_LANDSCAPE_VERSION:-${LANDSCAPE_VERSION}}"
+DOWNLOAD_DIR="${CACHE_DIR}/downloads/${RESOLVED_LANDSCAPE_VERSION}"
+
+# Determine download base URL
+if [[ "${RESOLVED_LANDSCAPE_VERSION}" == "latest" ]]; then
+    DOWNLOAD_BASE="${LANDSCAPE_REPO}/releases/latest/download"
+else
+    DOWNLOAD_BASE="${LANDSCAPE_REPO}/releases/download/${RESOLVED_LANDSCAPE_VERSION}"
+fi
 
 BUILD_NAME="landscape-mini-x86-${BASE_SYSTEM}"
 if [[ "${INCLUDE_DOCKER}" == "true" ]]; then
@@ -448,17 +464,6 @@ VMDK_FILE="${OUTPUT_DIR}/${BUILD_NAME}.vmdk"
 OVA_FILE="${OUTPUT_DIR}/${BUILD_NAME}.ova"
 BUILD_METADATA_FILE="${OUTPUT_METADATA_DIR}/build-metadata.txt"
 RESOLVED_SOURCES_FILE="${OUTPUT_METADATA_DIR}/resolved-sources.env"
-
-output_format_requested() {
-    local requested="$1"
-    local format
-    for format in "${OUTPUT_FORMAT_LIST[@]}"; do
-        if [[ "${format}" == "${requested}" ]]; then
-            return 0
-        fi
-    done
-    return 1
-}
 
 # ---------------------------------------------------------------------------
 # Source resolution helpers
@@ -590,13 +595,6 @@ should_resolve_sources() {
     return 1
 }
 
-# Determine download base URL
-if [[ "${LANDSCAPE_VERSION}" == "latest" ]]; then
-    DOWNLOAD_BASE="${LANDSCAPE_REPO}/releases/latest/download"
-else
-    DOWNLOAD_BASE="${LANDSCAPE_REPO}/releases/download/${LANDSCAPE_VERSION}"
-fi
-
 # ---------------------------------------------------------------------------
 # Setup trap
 # ---------------------------------------------------------------------------
@@ -620,7 +618,11 @@ main() {
     echo "  Include Docker    : ${INCLUDE_DOCKER}"
     echo "  Output Formats    : ${OUTPUT_FORMATS}"
     echo "  Landscape Version : ${LANDSCAPE_VERSION}"
+    if [[ "${RESOLVED_LANDSCAPE_VERSION}" != "${LANDSCAPE_VERSION}" ]]; then
+        echo "  Resolved Version  : ${RESOLVED_LANDSCAPE_VERSION}"
+    fi
     echo "  Download Source   : ${DOWNLOAD_BASE}"
+    echo "  Download Cache    : ${DOWNLOAD_DIR}"
     if [[ "${BASE_SYSTEM}" == "debian" ]]; then
         echo "  Debian Release    : ${DEBIAN_RELEASE}"
         echo "  APT Mirror        : ${MIRROR} (${RESOLVED_APT_MIRROR_SOURCE})"

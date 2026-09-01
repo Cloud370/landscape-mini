@@ -206,6 +206,12 @@ jobs:
             echo "dataplane_skip_reason=$dataplane_skip_reason"
           } >> "$GITHUB_OUTPUT"
 
+      - name: Restore landscape download cache
+        uses: actions/cache@v4
+        with:
+          path: .cache/downloads
+          key: landscape-downloads-v1-${{ steps.meta.outputs.resolved_version }}-${{ inputs.base_system }}
+
       - name: Render effective topology config
         env:
           LANDSCAPE_LAN_SERVER_IP: ${{ inputs.lan_server_ip }}
@@ -330,7 +336,8 @@ jobs:
           done
 
       - name: Fix output permissions
-        run: sudo chown -R "$(id -u):$(id -g)" output/ work/
+        run: |
+          sudo chown -R "$(id -u):$(id -g)" output/ work/ .cache/ 2>/dev/null || true
 
       - name: Capture artifact metadata
         env:

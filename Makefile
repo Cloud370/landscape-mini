@@ -20,7 +20,7 @@
 # =============================================================================
 
 .PHONY: help deps deps-test \
-	build test test-dataplane test-serial test-gui ssh clean distclean status
+	build test test-dataplane test-serial test-gui ssh clean distclean cache-clean status
 
 # --------------------------------------------------------------------------
 # Configuration
@@ -29,11 +29,12 @@
 empty :=
 space := $(empty) $(empty)
 comma := ,
-BUILD_ENV_VARS := BUILD_ENV_PROFILE BASE_SYSTEM INCLUDE_DOCKER OUTPUT_FORMATS LANDSCAPE_VERSION ROOT_PASSWORD LANDSCAPE_ADMIN_USER LANDSCAPE_ADMIN_PASS LANDSCAPE_LAN_SERVER_IP LANDSCAPE_LAN_RANGE_START LANDSCAPE_LAN_RANGE_END LANDSCAPE_LAN_NETMASK RUN_TEST EFFECTIVE_CONFIG_PATH EFFECTIVE_CONFIG_PROFILE EFFECTIVE_TOPOLOGY_SOURCE APT_MIRROR ALPINE_MIRROR DOCKER_APT_MIRROR DOCKER_APT_GPG_URL SOURCE_PROBE_TIMEOUT COMPRESS_OUTPUT LANDSCAPE_REPO IMAGE_SIZE_MB DEBIAN_RELEASE ALPINE_RELEASE TIMEZONE LOCALE EXTRA_LOCALES WORK_DIR OUTPUT_DIR LANDSCAPE_TEST_LOG_DIR SSH_PORT WEB_PORT LANDSCAPE_CONTROL_PORT QEMU_MEM QEMU_SMP MCAST_ADDR MCAST_PORT ROUTER_WAN_MAC ROUTER_LAN_MAC CLIENT_MAC
+BUILD_ENV_VARS := BUILD_ENV_PROFILE BASE_SYSTEM INCLUDE_DOCKER OUTPUT_FORMATS LANDSCAPE_VERSION ROOT_PASSWORD LANDSCAPE_ADMIN_USER LANDSCAPE_ADMIN_PASS LANDSCAPE_LAN_SERVER_IP LANDSCAPE_LAN_RANGE_START LANDSCAPE_LAN_RANGE_END LANDSCAPE_LAN_NETMASK RUN_TEST EFFECTIVE_CONFIG_PATH EFFECTIVE_CONFIG_PROFILE EFFECTIVE_TOPOLOGY_SOURCE APT_MIRROR ALPINE_MIRROR DOCKER_APT_MIRROR DOCKER_APT_GPG_URL SOURCE_PROBE_TIMEOUT COMPRESS_OUTPUT LANDSCAPE_REPO IMAGE_SIZE_MB DEBIAN_RELEASE ALPINE_RELEASE TIMEZONE LOCALE EXTRA_LOCALES WORK_DIR OUTPUT_DIR CACHE_DIR LANDSCAPE_TEST_LOG_DIR SSH_PORT WEB_PORT LANDSCAPE_CONTROL_PORT QEMU_MEM QEMU_SMP MCAST_ADDR MCAST_PORT ROUTER_WAN_MAC ROUTER_LAN_MAC CLIENT_MAC
 BUILD_PRESERVE_ENV := $(subst $(space),$(comma),$(strip $(BUILD_ENV_VARS)))
 OVMF := /usr/share/ovmf/OVMF.fd
 WORK_DIR ?= work
 OUTPUT_DIR ?= output
+CACHE_DIR ?= .cache
 OUTPUT_METADATA_DIR := $(OUTPUT_DIR)/metadata
 LANDSCAPE_CONTROL_PORT ?= 6443
 QEMU_MEM ?= 1024
@@ -96,6 +97,7 @@ help: ## Show all available targets with descriptions
 	@echo "  IMAGE=$(IMAGE)"
 	@echo "  WORK_DIR=$(WORK_DIR)"
 	@echo "  OUTPUT_DIR=$(OUTPUT_DIR)"
+	@echo "  CACHE_DIR=$(CACHE_DIR) (survives make clean; make cache-clean to purge)"
 	@echo "  test SSH port=$(DISPLAY_SSH_PORT)"
 	@echo "  test Web port=$(DISPLAY_WEB_PORT)"
 	@echo "  dataplane mcast=$(DISPLAY_MCAST_ADDR):$(DISPLAY_MCAST_PORT)"
@@ -181,6 +183,9 @@ clean: ## Remove work directory (requires sudo)
 distclean: ## Remove work and output directories (requires sudo)
 	sudo rm -rf $(WORK_DIR)/ $(OUTPUT_DIR)/
 
+cache-clean: ## Remove the persistent download/package cache (requires sudo)
+	sudo rm -rf $(CACHE_DIR)/
+
 # --------------------------------------------------------------------------
 # Status / Info
 # --------------------------------------------------------------------------
@@ -206,5 +211,10 @@ status: ## Show disk usage of work and output directories
 		ls -lh "$(OUTPUT_DIR)" 2>/dev/null || echo "  (none)"; \
 	else \
 		echo "$(OUTPUT_DIR)/ directory: does not exist"; \
+	fi
+	@if [ -d "$(CACHE_DIR)" ]; then \
+		echo ""; \
+		echo "$(CACHE_DIR)/ directory (build cache):"; \
+		du -sh "$(CACHE_DIR)" 2>/dev/null || echo "  (empty)"; \
 	fi
 	@echo ""

@@ -147,7 +147,7 @@ Git tag 使用仓库自己的版本序列，例如：
 
 `build.env` 中的 `LANDSCAPE_VERSION` 表示上游 Landscape 版本，例如：
 
-- `v0.18.2`
+- `v0.24.2`
 
 它不等于本仓库自己的 release tag。
 

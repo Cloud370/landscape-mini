@@ -79,6 +79,20 @@ make build INCLUDE_DOCKER=true OUTPUT_FORMATS=img,ova
 - `LANDSCAPE_LAN_SERVER_IP` / `LANDSCAPE_LAN_RANGE_START` / `LANDSCAPE_LAN_RANGE_END` / `LANDSCAPE_LAN_NETMASK`
 - `RUN_TEST`
 
+#### 构建缓存
+
+本地构建默认启用持久化缓存（目录 `.cache/`，可用 `CACHE_DIR` 覆盖），`make clean` / `make distclean` 不会删除它：
+
+- Landscape 发行包（webserver 二进制、static.zip）按版本缓存，并使用上游 `SHASUM256sum.txt` 做 SHA256 校验
+- Debian apt 归档包与 Alpine apk 包缓存，重复构建时跳过大部分包下载
+
+```bash
+make status       # 查看 work/output/cache 目录占用
+make cache-clean  # 彻底清空构建缓存（需要重新下载）
+```
+
+`LANDSCAPE_VERSION=latest` 会在构建开始时解析为具体 tag 再进入缓存；CI（GitHub Actions）也会通过 `actions/cache` 复用下载缓存。
+
 ### 本地测试
 
 ```bash
@@ -237,7 +251,7 @@ bash <(curl -sL https://raw.githubusercontent.com/bin456789/reinstall/main/reins
 | `ALPINE_MIRROR` | _(auto probe)_ | Alpine 软件源显式覆盖；如果为空则从候选列表自动探测 |
 | `DOCKER_APT_MIRROR` | _(auto probe)_ | Debian Docker APT 仓库显式覆盖；如果为空则从候选列表自动探测 |
 | `DOCKER_APT_GPG_URL` | _(auto probe)_ | Debian Docker APT GPG key 显式覆盖；如果为空则从候选列表自动探测 |
-| `LANDSCAPE_VERSION` | `v0.18.2` | 上游 Landscape 版本号 |
+| `LANDSCAPE_VERSION` | `v0.24.2` | 上游 Landscape 版本号 |
 | `LANDSCAPE_REPO` | `https://github.com/ThisSeanZhang/landscape` | 上游 Landscape 发布仓库 |
 | `IMAGE_SIZE_MB` | `2048` | 初始镜像大小（最终会自动缩小） |
 | `ROOT_PASSWORD` | `landscape` | root / ld 登录密码 |

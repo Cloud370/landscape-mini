@@ -16,6 +16,8 @@ cleanup() {
 
     # Unmount in reverse order, ignoring errors
     for mp in \
+        "${ROOTFS_DIR}/var/cache/apt/archives" \
+        "${ROOTFS_DIR}/etc/apk/cache" \
         "${ROOTFS_DIR}/proc" \
         "${ROOTFS_DIR}/sys" \
         "${ROOTFS_DIR}/dev/pts" \
@@ -296,6 +298,84 @@ derive_probe_url_for_candidate() {
 }
 
 # ---------------------------------------------------------------------------
+# Helper: resolve LANDSCAPE_VERSION="latest" to a concrete release tag
+# Sets RESOLVED_LANDSCAPE_VERSION (falls back to "latest" when resolution
+# fails, e.g. no network to github.com yet).
+# ---------------------------------------------------------------------------
+resolve_landscape_release_version() {
+    if [[ "${LANDSCAPE_VERSION:-}" != "latest" ]]; then
+        RESOLVED_LANDSCAPE_VERSION="${LANDSCAPE_VERSION}"
+        return 0
+    fi
+
+    local redirect_url tag
+    if redirect_url=$(curl -fsSIL -o /dev/null -w '%{url_effective}' --max-time 30 \
+        "${LANDSCAPE_REPO}/releases/latest" 2>/dev/null) \
+        && tag="${redirect_url##*/}" \
+        && [[ "${tag}" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+        RESOLVED_LANDSCAPE_VERSION="${tag}"
+        echo "  Resolved landscape 'latest' to ${tag}."
+    else
+        RESOLVED_LANDSCAPE_VERSION="latest"
+        echo "  [WARN] Could not resolve the 'latest' landscape release tag; keeping 'latest'." >&2
+        echo "  [WARN] The init config version field will not be pinned; upstream may reject it." >&2
+    fi
+}
+
+# ---------------------------------------------------------------------------
+# Helper: pin the init config `version` field to the resolved landscape version
+# Upstream (>= v0.19) requires this field to exactly match the webserver
+# build version, otherwise the router refuses to start.
+# ---------------------------------------------------------------------------
+ensure_init_config_version() {
+    local file_path="$1"
+
+    if [[ "${RESOLVED_LANDSCAPE_VERSION:-latest}" == "latest" ]]; then
+        echo "  [WARN] Landscape version unresolved; leaving init config version untouched: ${file_path}" >&2
+        return 0
+    fi
+
+    local expected_version="${RESOLVED_LANDSCAPE_VERSION#v}"
+    if grep -qE '^[[:space:]]*version[[:space:]]*=' "${file_path}"; then
+        sed -i -E "s|^([[:space:]]*version[[:space:]]*=[[:space:]]*\").*(\"[[:space:]]*)\$|\1${expected_version}\2|" "${file_path}"
+    else
+        sed -i "1i version = \"${expected_version}\"" "${file_path}"
+    fi
+    echo "  Init config version pinned to ${expected_version}."
+}
+
+# ---------------------------------------------------------------------------
+# Helper: verify a cached/downloaded file against SHASUM256sum.txt
+# Returns 0 (ok or skipped), 1 on mismatch.
+# ---------------------------------------------------------------------------
+verify_download_checksum() {
+    local sums_file="$1"
+    local file_path="$2"
+    local asset_name="$3"
+    local expected actual
+
+    if [[ ! -f "${sums_file}" ]]; then
+        echo "  [WARN] SHASUM256sum.txt unavailable; skipping checksum verification for ${asset_name}." >&2
+        return 0
+    fi
+
+    expected=$(awk -v name="${asset_name}" '$2 == name {print $1; exit}' "${sums_file}")
+    if [[ -z "${expected}" ]]; then
+        echo "  [WARN] ${asset_name} not listed in SHASUM256sum.txt; skipping checksum verification." >&2
+        return 0
+    fi
+
+    actual=$(sha256sum "${file_path}" | awk '{print $1}')
+    if [[ "${actual}" != "${expected}" ]]; then
+        echo "  [ERROR] Checksum mismatch for ${asset_name}: expected ${expected}, got ${actual}." >&2
+        return 1
+    fi
+
+    echo "  [OK] ${asset_name} checksum verified."
+    return 0
+}
+
+# ---------------------------------------------------------------------------
 # Helper: probe candidates in configured order with preferred-source failover
 # ---------------------------------------------------------------------------
 select_preferred_source() {
@@ -420,6 +500,8 @@ mount_chroot_fs() {
 # ---------------------------------------------------------------------------
 umount_chroot_fs() {
     echo "  Unmounting special filesystems ..."
+    umount "${ROOTFS_DIR}/var/cache/apt/archives" 2>/dev/null || true
+    umount "${ROOTFS_DIR}/etc/apk/cache" 2>/dev/null || true
     umount "${ROOTFS_DIR}/proc" 2>/dev/null || true
     umount "${ROOTFS_DIR}/sys" 2>/dev/null || true
     umount "${ROOTFS_DIR}/dev/pts" 2>/dev/null || true
@@ -468,6 +550,7 @@ output_formats=${OUTPUT_FORMATS}
 run_test=${RUN_TEST:-none}
 produced_files=${produced_files}
 landscape_version=${LANDSCAPE_VERSION}
+landscape_version_resolved=${RESOLVED_LANDSCAPE_VERSION:-${LANDSCAPE_VERSION}}
 build_name=${BUILD_NAME}
 image_file=$(basename "${IMAGE_FILE}")
 config_profile=${EFFECTIVE_CONFIG_PROFILE}
@@ -657,6 +740,19 @@ EOF
     echo "  OVA created: ${OVA_FILE}"
 }
 
+# ---------------------------------------------------------------------------
+# Helper: gzip-compress a file, using pigz when available
+# ---------------------------------------------------------------------------
+compress_file_gzip() {
+    local file_path="$1"
+
+    if command -v pigz >/dev/null 2>&1; then
+        pigz -c "${file_path}" > "${file_path}.gz"
+    else
+        gzip -k -f "${file_path}"
+    fi
+}
+
 # =============================================================================
 # Phase 1: Download Landscape
 # =============================================================================
@@ -676,23 +772,44 @@ phase_download() {
     local bin_file="${DOWNLOAD_DIR}/${bin_name}"
     local static_url="${DOWNLOAD_BASE}/static.zip"
     local static_file="${DOWNLOAD_DIR}/static.zip"
+    local sums_url="${DOWNLOAD_BASE}/SHASUM256sum.txt"
+    local sums_file="${DOWNLOAD_DIR}/SHASUM256sum.txt"
     local tmp_file=""
 
-    if [[ -f "${bin_file}" ]]; then
-        echo "  [OK] ${bin_name} already downloaded."
+    # Best-effort checksum manifest; downloaded first so cached assets can be
+    # verified before reuse.
+    if [[ ! -f "${sums_file}" ]]; then
+        echo "  Fetching SHASUM256sum.txt ..."
+        tmp_file="${sums_file}.part"
+        if curl -fsSL --retry 3 --retry-delay 2 -o "${tmp_file}" "${sums_url}"; then
+            mv "${tmp_file}" "${sums_file}"
+        else
+            rm -f "${tmp_file}"
+            echo "  [WARN] Could not fetch SHASUM256sum.txt; downloads will be unverified." >&2
+        fi
     else
+        echo "  [OK] SHASUM256sum.txt already cached."
+    fi
+
+    if [[ -f "${bin_file}" ]] && verify_download_checksum "${sums_file}" "${bin_file}" "${bin_name}"; then
+        echo "  [OK] ${bin_name} already downloaded (cache hit)."
+    else
+        rm -f "${bin_file}"
         echo "  [DOWNLOADING] ${bin_name} ..."
         tmp_file="${bin_file}.part"
         rm -f "${tmp_file}"
         curl -fL --retry 3 --retry-delay 2 -o "${tmp_file}" "${bin_url}"
+        verify_download_checksum "${sums_file}" "${tmp_file}" "${bin_name}" || {
+            rm -f "${tmp_file}"
+            return 1
+        }
         mv "${tmp_file}" "${bin_file}"
     fi
     chmod +x "${bin_file}"
 
     if [[ -f "${static_file}" ]]; then
-        if unzip -tq "${static_file}" >/dev/null 2>&1; then
-            echo "  [OK] static.zip already downloaded."
-        else
+        if ! unzip -tq "${static_file}" >/dev/null 2>&1 \
+            || ! verify_download_checksum "${sums_file}" "${static_file}" "static.zip"; then
             echo "  [WARN] Cached static.zip is invalid, removing and re-downloading ..."
             rm -f "${static_file}"
         fi
@@ -708,6 +825,10 @@ phase_download() {
             echo "  [ERROR] Downloaded static.zip is not a valid zip archive. Check LANDSCAPE_VERSION / DOWNLOAD_BASE."
             return 1
         fi
+        verify_download_checksum "${sums_file}" "${tmp_file}" "static.zip" || {
+            rm -f "${tmp_file}"
+            return 1
+        }
         mv "${tmp_file}" "${static_file}"
     fi
 
@@ -723,9 +844,9 @@ phase_create_image() {
 
     mkdir -p "${OUTPUT_DIR}" "${OUTPUT_METADATA_DIR}" "${ROOTFS_DIR}"
 
-    # Create raw image
+    # Create raw image (sparse file — no need to write 2GB of zeros)
     echo "  Creating ${IMAGE_SIZE_MB}MB raw image ..."
-    dd if=/dev/zero of="${IMAGE_FILE}" bs=1M count="${IMAGE_SIZE_MB}" status=progress
+    truncate -s "${IMAGE_SIZE_MB}M" "${IMAGE_FILE}"
 
     # Partition with GPT: BIOS boot (1-2MiB) + ESP (2-202MiB) + root (202MiB - 100%)
     echo "  Partitioning (GPT: BIOS + UEFI hybrid) ..."
@@ -797,7 +918,16 @@ phase_install_landscape() {
     local landscape_init_source="${EFFECTIVE_CONFIG_PATH:-${SCRIPT_DIR}/configs/landscape_init.toml}"
     if [[ -f "${landscape_init_source}" ]]; then
         echo "  Installing landscape_init.toml from ${landscape_init_source} ..."
-        cp "${landscape_init_source}" "${ROOTFS_DIR}/root/.landscape-router/landscape_init.toml"
+        # Stage a copy under the metadata dir so inputs (repo template or a
+        # user-provided config) are never modified in place, and local builds
+        # also ship the effective config artifact.
+        local staged_init="${OUTPUT_METADATA_DIR}/effective-landscape_init.toml"
+        mkdir -p "${OUTPUT_METADATA_DIR}"
+        if [[ "$(realpath -m "${landscape_init_source}")" != "$(realpath -m "${staged_init}")" ]]; then
+            cp "${landscape_init_source}" "${staged_init}"
+        fi
+        ensure_init_config_version "${staged_init}"
+        cp "${staged_init}" "${ROOTFS_DIR}/root/.landscape-router/landscape_init.toml"
     else
         echo "  [SKIP] No landscape_init.toml found (will use --auto mode)."
     fi
@@ -1025,12 +1155,12 @@ phase_cleanup_and_shrink() {
 
     if [[ "${COMPRESS_OUTPUT}" == "yes" ]]; then
         echo "  Compressing raw image with gzip ..."
-        gzip -k -f "${IMAGE_FILE}"
+        compress_file_gzip "${IMAGE_FILE}"
         echo "  Compressed: ${IMAGE_FILE}.gz"
 
         if [[ -f "${VMDK_FILE}" ]]; then
             echo "  Compressing VMDK image with gzip ..."
-            gzip -k -f "${VMDK_FILE}"
+            compress_file_gzip "${VMDK_FILE}"
             echo "  Compressed: ${VMDK_FILE}.gz"
         fi
     fi

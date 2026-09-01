@@ -1028,7 +1028,7 @@ _landscape_api_candidate_paths() {
                 ;;
             static_nat_mappings)
                 if [[ "$prefix" == 'v1' ]]; then
-                    printf '/api/v1/nat/static_mappings\n'
+                    printf '/api/v1/nat/static_mappings/v4\n'
                 else
                     printf '/api/src/config/static_nat_mappings\n'
                 fi
