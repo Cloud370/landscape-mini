@@ -30,6 +30,19 @@ backend_check_deps() {
     # Note: apk-tools-static is downloaded at runtime, no host dependency needed
 }
 
+# ---------------------------------------------------------------------------
+# Persistent apk cache (host-side, survives `make clean`)
+# ---------------------------------------------------------------------------
+setup_apk_cache_mount() {
+    mkdir -p "${CACHE_DIR}/apk" "${ROOTFS_DIR}/etc/apk/cache"
+    mount --bind "${CACHE_DIR}/apk" "${ROOTFS_DIR}/etc/apk/cache"
+    echo "  Apk package cache mounted: ${CACHE_DIR}/apk"
+}
+
+umount_apk_cache() {
+    umount "${ROOTFS_DIR}/etc/apk/cache" 2>/dev/null || true
+}
+
 # =============================================================================
 # Phase 3: Bootstrap Alpine
 # =============================================================================
@@ -86,6 +99,9 @@ backend_configure() {
     # Mount bind filesystems for chroot
     mount_chroot_fs
 
+    # Persistent package cache for faster rebuilds
+    setup_apk_cache_mount
+
     # ---- Build-time DNS resolver (needed for apk to fetch packages) ----
     configure_build_resolver
 
@@ -118,13 +134,15 @@ UUID=${ROOT_UUID}   /           ext4    errors=remount-ro   0       1
 UUID=${EFI_UUID}    /boot/efi   vfat    umask=0077          0       2
 EOF
 
-# ---- Install packages ----
+    # ---- Install packages ----
     echo "  Installing packages (this may take a while) ..."
     # Keep targeted wired-NIC firmware only. Avoid the full linux-firmware meta-package,
     # which pulls in large GPU/Wi-Fi/SoC firmware sets unrelated to this x86 router image.
+    # /etc/apk/cache is bind-mounted to the host cache dir; `apk update`
+    # refreshes the index so cached packages stay consistent.
     run_in_chroot_retry 3 5 "
         apk update
-        apk add --no-cache \
+        apk add \
             linux-lts \
             linux-firmware-rtl_nic \
             linux-firmware-bnx2 \
@@ -378,6 +396,10 @@ EOF
 # Phase 7 backend: Alpine-specific cleanup
 # ---------------------------------------------------------------------------
 backend_cleanup() {
+    # Detach the persistent apk cache before cleaning, so `apk cache clean`
+    # cannot wipe the host-side cache used by later rebuilds.
+    umount_apk_cache
+
     # ---- Remove bloated bpftool dependencies ----
     # Alpine's bpftool package pulls in perf → python3 (~31MB), binutils (~10MB),
     # libstdc++, libslang, etc.  apk refuses to remove them (bpftool depends on

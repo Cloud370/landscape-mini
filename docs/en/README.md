@@ -79,6 +79,20 @@ Common local customization inputs include:
 - `LANDSCAPE_LAN_SERVER_IP` / `LANDSCAPE_LAN_RANGE_START` / `LANDSCAPE_LAN_RANGE_END` / `LANDSCAPE_LAN_NETMASK`
 - `RUN_TEST`
 
+#### Build cache
+
+Local builds keep a persistent cache directory (`.cache/`, override with `CACHE_DIR`) that survives `make clean` / `make distclean`:
+
+- Landscape release assets (webserver binary, static.zip) are cached per version and verified against the upstream `SHASUM256sum.txt`
+- Debian apt archives and Alpine apk packages are cached, skipping most package downloads on rebuilds
+
+```bash
+make status       # show work/output/cache disk usage
+make cache-clean  # purge the build cache entirely (forces re-download)
+```
+
+`LANDSCAPE_VERSION=latest` is resolved to a concrete release tag before entering the cache; CI reuses the download cache via `actions/cache`.
+
 ### Local Test
 
 ```bash
@@ -237,7 +251,7 @@ Avoid using tracked `build.env` as the day-to-day customization entry point. Pre
 | `ALPINE_MIRROR` | _(auto probe)_ | Explicit Alpine package mirror override; if empty, candidates are auto-detected |
 | `DOCKER_APT_MIRROR` | _(auto probe)_ | Explicit Debian Docker APT repository override; if empty, candidates are auto-detected |
 | `DOCKER_APT_GPG_URL` | _(auto probe)_ | Explicit Debian Docker APT GPG key URL override; if empty, candidates are auto-detected |
-| `LANDSCAPE_VERSION` | `v0.18.2` | Upstream Landscape version |
+| `LANDSCAPE_VERSION` | `v0.24.2` | Upstream Landscape version |
 | `LANDSCAPE_REPO` | `https://github.com/ThisSeanZhang/landscape` | Upstream Landscape release repository |
 | `IMAGE_SIZE_MB` | `2048` | Initial image size (shrunk automatically later) |
 | `ROOT_PASSWORD` | `landscape` | Login password for `root` / `ld` |
