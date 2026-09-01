@@ -42,7 +42,9 @@ If you already know you want to build locally, debug, or validate unpushed chang
 Builds run **rootless by default**: chroot-style steps go through Linux user
 namespaces, so no `sudo`, loop devices, or mounts are needed (running as root
 still works). Requirements: Linux with unprivileged user namespaces enabled
-(the default on mainstream distros) plus `make deps`. `make deps` also installs
+plus `make deps`. Ubuntu 24.04+ confines them behind AppArmor — run
+`sudo sysctl kernel.apparmor_restrict_unprivileged_userns=0` (or boot with
+that sysctl) for the native-speed engine. `make deps` also installs
 `uidmap`: together with the `/etc/subuid` + `/etc/subgid` ranges that
 Debian/Ubuntu grant human users by default, the build maps those delegated
 ids into its namespace so dpkg's group ownerships (shadow, crontab, ...)

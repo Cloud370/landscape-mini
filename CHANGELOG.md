@@ -22,7 +22,7 @@ This file currently tracks unreleased work and recent notable changes.
 
 ### Changed / 变更
 
-- CI and Custom Build now build images without `sudo` (rootless on the runner), removing the post-build permission fixup step; the build job installs `mtools`/`gdisk`/`proot` instead of `parted` / CI 与 Custom Build 构建镜像不再使用 `sudo`（在 runner 上以 rootless 运行），并移除构建后的权限修正步骤；构建 job 的依赖改为安装 `mtools`/`gdisk`/`proot`，移除 `parted`
+- CI and Custom Build now build images without `sudo` (rootless on the runner), removing the post-build permission fixup step; the build job installs `mtools`/`gdisk`/`proot`/`uidmap` instead of `parted`, and lifts Ubuntu 24.04+'s AppArmor restriction on unprivileged user namespaces so the runner picks the native-speed namespace engine / CI 与 Custom Build 构建镜像不再使用 `sudo`（在 runner 上以 rootless 运行），并移除构建后的权限修正步骤；构建 job 的依赖改为安装 `mtools`/`gdisk`/`proot`/`uidmap`（移除 `parted`），并解除 Ubuntu 24.04+ 对非特权用户命名空间的 AppArmor 限制，使 runner 选用原生速度的命名空间引擎
 - The `ld` user is now pinned to uid 1000 in all build modes; rootless-built images fix `/home/ld` ownership on first boot via the existing expand-rootfs hook (no-op for root builds)\
   所有构建模式下 `ld` 用户固定为 uid 1000；rootless 构建的镜像通过已有的 expand-rootfs 钩子在首次启动时修正 `/home/ld` 属主（root 构建为空操作）
 - `make clean` / `make distclean` / `make cache-clean` no longer require sudo (plain `rm` with a sudo fallback for trees left by older root-based builds) / `make clean` / `make distclean` / `make cache-clean` 不再必须 sudo（普通 `rm`，对旧版 root 构建遗留的目录回退到 sudo）

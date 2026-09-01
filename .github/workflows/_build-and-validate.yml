@@ -280,6 +280,16 @@ jobs:
         run: |
           set -euo pipefail
 
+          # Ubuntu 24.04+ confines unprivileged user namespaces behind
+          # AppArmor; without this the engine probe falls back to proot,
+          # whose ptrace path translation does not work on hosted runners.
+          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0 >/dev/null 2>&1 || true
+          # subid delegation for the full-mapping namespace (native-speed
+          # rootless chroot); ubuntu images normally ship this already.
+          if ! grep -q "^runner:" /etc/subgid 2>/dev/null; then
+            echo "runner:100000:65536" | sudo tee -a /etc/subuid /etc/subgid >/dev/null
+          fi
+
           version_flag=()
           if [ -n "${RESOLVED_VERSION}" ]; then
             version_flag=(--version "${RESOLVED_VERSION}")
