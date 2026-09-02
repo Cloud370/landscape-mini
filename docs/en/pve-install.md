@@ -293,6 +293,15 @@ For Chinese interaction (e.g. `lkit`'s Chinese TUI) use instead:
 - SSH: rendered by your local terminal, full font coverage
 - Landscape's web terminal: rendered by the browser
 
+To get a proper Chinese-capable "console", add a serial port to the VM (rendering then happens browser-side as well):
+
+- Web UI: VM → Hardware → Add → Serial Port
+- or from the PVE host shell: `qm set <vmid> --serial0 socket`
+
+The console dropdown then offers an **xterm.js** terminal — select it and Chinese renders correctly.
+
+Note: the serial port **cannot** be embedded in the OVA — PVE's OVF importer does not create hardware for serial entries, and some importers (certain VMware paths included) even fail outright on OVF serial items; add the serial port once after import as above.
+
 ### Why does `eth0` not have an IP after boot?
 
 Check these first:
