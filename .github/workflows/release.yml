@@ -78,13 +78,13 @@ jobs:
       contents: write
     steps:
       - name: Download Debian no-Docker artifact
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           name: ${{ needs.build_debian_no_docker.outputs.image_artifact }}
           path: artifacts/debian-no-docker/
 
       - name: Download Debian Docker artifact
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           name: ${{ needs.build_debian_docker.outputs.image_artifact }}
           path: artifacts/debian-docker/
@@ -206,7 +206,7 @@ jobs:
           } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Create GitHub Release
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3
         with:
           files: |
             artifacts/**/*.img.gz

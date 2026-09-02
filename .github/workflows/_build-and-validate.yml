@@ -132,7 +132,7 @@ jobs:
       dataplane_skip_reason: ${{ steps.tests.outputs.dataplane_skip_reason }}
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Resolve validation metadata
         id: meta
@@ -207,7 +207,7 @@ jobs:
           } >> "$GITHUB_OUTPUT"
 
       - name: Restore landscape download cache
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: .cache/downloads
           key: landscape-downloads-v1-${{ steps.meta.outputs.resolved_version }}-${{ inputs.base_system }}
@@ -449,7 +449,7 @@ jobs:
         run: ls -lh output/
 
       - name: Upload image artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: ${{ steps.meta.outputs.image_artifact }}
           path: |
@@ -462,7 +462,7 @@ jobs:
 
       - name: Upload build log fragment
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: ${{ steps.meta.outputs.log_artifact }}-build
           path: output/test-logs/
@@ -475,10 +475,10 @@ jobs:
     timeout-minutes: 45
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Download image artifact
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           name: ${{ needs.build_image.outputs.image_artifact }}
           path: output/
@@ -545,7 +545,7 @@ jobs:
 
       - name: Upload readiness log fragment
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: ${{ needs.build_image.outputs.log_artifact }}-readiness
           path: output/test-logs/
@@ -558,10 +558,10 @@ jobs:
     timeout-minutes: 50
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Download image artifact
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           name: ${{ needs.build_image.outputs.image_artifact }}
           path: output/
@@ -628,7 +628,7 @@ jobs:
 
       - name: Upload dataplane log fragment
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: ${{ needs.build_image.outputs.log_artifact }}-dataplane
           path: output/test-logs/
@@ -643,21 +643,21 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - name: Download build log fragment
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           name: ${{ needs.build_image.outputs.log_artifact }}-build
           path: output/test-logs/build/
 
       - name: Download readiness log fragment
         if: ${{ needs.build_image.outputs.run_readiness == 'true' }}
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           name: ${{ needs.build_image.outputs.log_artifact }}-readiness
           path: output/test-logs/readiness/
 
       - name: Download dataplane log fragment
         if: ${{ needs.build_image.outputs.run_dataplane == 'true' }}
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           name: ${{ needs.build_image.outputs.log_artifact }}-dataplane
           path: output/test-logs/dataplane/
@@ -676,7 +676,7 @@ jobs:
 
       - name: Upload validation logs
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: ${{ needs.build_image.outputs.log_artifact }}
           path: output/final-test-logs/
