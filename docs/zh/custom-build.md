@@ -91,12 +91,24 @@
 - latest：`https://github.com/<owner>/landscape-mini/releases/download/custom-build-latest/<asset>`
 - 历史：`https://github.com/<owner>/landscape-mini/releases/download/custom-build-<artifact_id>/<asset>`
 
+产物文件名按构建身份固定生成，规则是：
+
+`landscape-mini-x86-<base_system>[-docker][-lkit].<img.gz|vmdk.gz|ova>`
+
+例如默认构建（Debian + lkit）的 OVA 是 `landscape-mini-x86-debian-lkit.ova`。
+
+因此只要构建选项不变，你的 latest 直链就是**长期固定**的，例如：
+
+`https://github.com/<owner>/landscape-mini/releases/download/custom-build-latest/landscape-mini-x86-debian-lkit.ova`
+
+每次成功重新构建，同一个 URL 会自动指向最新产物 —— 可以直接写进教程、脚本或 PVE 的 URL 导入框，不用每次去页面里找。
+
 说明：
 
 - `<owner>` 就是你自己 fork / 仓库的用户名或组织名
 - `custom-build-latest` 会随着后续成功构建更新
 - `custom-build-<artifact_id>` 会固定保留，不会被后续成功构建覆盖
-- workflow summary 会直接渲染本次构建的 release 页面、历史页面和每个产物的直链，方便直接复制
+- workflow summary 会渲染 release 页面、历史页面和每个产物的直链表格，末尾还有「复制即用的 Latest 直链」代码块，整行复制即可
 - 如果你还要保留 workflow 原始 artifact，也仍然可以记录 `run_id` / `artifact_id`
 
 ---

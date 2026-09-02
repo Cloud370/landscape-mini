@@ -666,6 +666,16 @@ jobs:
               echo "| ${asset} | $(describe_asset "$asset") | ${latest_link} | ${history_link} |"
             done
             echo ''
+            echo '## 复制即用的 Latest 直链'
+            echo ''
+            echo '```text'
+            shopt -s nullglob
+            for asset_path in release-assets/latest/*.img.gz release-assets/latest/*.ova release-assets/latest/*.vmdk.gz; do
+              echo "${latest_download_base}/$(basename "$asset_path")"
+            done
+            shopt -u nullglob
+            echo '```'
+            echo ''
             echo '## 使用说明'
             echo ''
             echo '| 项目 | 说明 |'

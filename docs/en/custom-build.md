@@ -91,12 +91,24 @@ Copy-ready direct download formats:
 - latest: `https://github.com/<owner>/landscape-mini/releases/download/custom-build-latest/<asset>`
 - history: `https://github.com/<owner>/landscape-mini/releases/download/custom-build-<artifact_id>/<asset>`
 
+Asset names follow the build identity deterministically:
+
+`landscape-mini-x86-<base_system>[-docker][-lkit].<img.gz|vmdk.gz|ova>`
+
+For example the default build (Debian + lkit) produces `landscape-mini-x86-debian-lkit.ova`.
+
+So as long as you keep the same build options, your latest direct URL is **stable long-term**, for example:
+
+`https://github.com/<owner>/landscape-mini/releases/download/custom-build-latest/landscape-mini-x86-debian-lkit.ova`
+
+Every successful rebuild repoints the same URL at the newest artifacts — you can hard-code it into tutorials, scripts, or PVE's URL import field instead of hunting through the page each time.
+
 Notes:
 
 - `<owner>` is your fork or repository owner name
 - `custom-build-latest` moves to the newest successful build
 - `custom-build-<artifact_id>` stays immutable and is not replaced by later runs
-- the workflow summary renders the latest page, history page, and per-asset direct links for easy copy/paste
+- the workflow summary renders the latest page, history page, and a per-asset direct-link table, ending with a fenced "copy-ready latest links" block — copy whole lines from there
 - if you also want the original workflow artifact identity, keep `run_id` / `artifact_id`
 
 ---

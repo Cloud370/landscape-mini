@@ -81,31 +81,27 @@
 
 优先使用仓库官方 Release 中的 `.ova` 下载链接。
 
-如果你使用的是 `Custom Build`，请到你自己的 workflow 产物或固定 release 页面复制 `.ova` 下载链接。
+如果你使用的是 `Custom Build`，`.ova` 下载链接是固定的，见第 3 步的公式；也可以到 workflow 摘要末尾的「复制即用的 Latest 直链」直接复制。
 
 ### 第 1 步：确认存储池允许导入
 
-进入：
+在**左侧边栏**找到对应的存储图标（例如 `local`），点击进入。
 
-**数据中心 -> 存储 -> 对应存储对象（例如 `local`）**
-
-点击编辑，确认“内容”里已经勾选：
+在右侧面板点击 **编辑**，确认“内容”里已经勾选：
 
 - `导入`
 - `磁盘镜像`
 
 ### 第 2 步：进入导入页面
 
-进入：
-
-**数据中心 -> 存储 -> 对应存储对象（例如 `local`） -> 内容**
+同样在左侧边栏点击该存储，右侧面板会显示它的子页列表，选择其中的 **内容**。
 
 找到 **从 URL 下载 / 导入** 的入口。
 
 ### 第 3 步：填入下载链接
 
 - 官方 Release：直接复制对应 `.ova` 的下载链接
-- Custom Build：去你自己的 workflow 产物页面或固定 release 页面复制 `.ova` 下载链接
+- Custom Build：链接是固定的，可以直接按公式拼出 —— `https://github.com/<你的用户名>/landscape-mini/releases/download/custom-build-latest/landscape-mini-x86-<base>[-docker][-lkit].ova`（例如默认构建是 `landscape-mini-x86-debian-lkit.ova`）；或者到 workflow 运行页面，在摘要末尾的「复制即用的 Latest 直链」代码块里整行复制
 
 然后把链接填入 PVE 的 URL 导入框。
 

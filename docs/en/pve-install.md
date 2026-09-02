@@ -81,31 +81,27 @@ How to fix it:
 
 Prefer the official Release `.ova` download link from this repository.
 
-If you are using `Custom Build`, copy the `.ova` download link from your own workflow artifact page or fixed release page.
+If you are using `Custom Build`, the `.ova` download link is deterministic — see the formula in Step 3 — or copy it from the fenced "copy-ready latest links" block at the end of the workflow summary.
 
 ### Step 1: Confirm the storage pool allows import
 
-Go to:
+In the **left sidebar**, find the target storage entry (for example `local`) and click it.
 
-**Datacenter -> Storage -> target storage entry (for example `local`)**
-
-Click Edit and make sure **Content** includes:
+In the right panel, click **Edit** and make sure **Content** includes:
 
 - `Import`
 - `Disk image`
 
 ### Step 2: Open the import page
 
-Go to:
-
-**Datacenter -> Storage -> target storage entry (for example `local`) -> Content**
+Click the same storage in the left sidebar; the right panel lists its sub-pages — pick **Content**.
 
 Find the **Download from URL / Import** entry.
 
 ### Step 3: Paste the download link
 
 - Official Release: copy the download link of the target `.ova`
-- Custom Build: copy the `.ova` download link from your own workflow artifact page or fixed release page
+- Custom Build: the link is deterministic — build it as `https://github.com/<your-username>/landscape-mini/releases/download/custom-build-latest/landscape-mini-x86-<base>[-docker][-lkit].ova` (the default build yields `landscape-mini-x86-debian-lkit.ova`); or open the workflow run page and copy a whole line from the fenced "copy-ready latest links" block at the end of the summary
 
 Then paste the link into the PVE URL import field.
 
@@ -269,7 +265,7 @@ First confirm the target storage has these content types enabled:
 
 Path:
 
-**Datacenter -> Storage -> target storage entry (for example `local`) -> Edit -> Content**
+**left sidebar -> target storage (for example `local`) -> right panel: Edit -> Content**
 
 ### What should I do if I get this error?
 
@@ -284,7 +280,7 @@ This usually means:
 
 How to fix it:
 
-1. Go to **Datacenter -> Storage -> local -> Edit**
+1. In the left sidebar click **local**, then **Edit** in the right panel
 2. Make sure **Content** includes `Import` and `Disk image`
 3. If it still fails, switch to a directory-based storage that supports file-based import, or use manual `.img` import instead
 
