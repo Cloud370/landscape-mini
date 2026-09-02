@@ -127,3 +127,42 @@ if [ "$PARTITION_CHANGED" = "yes" ]; then
 else
     log "filesystem checked against current partition size"
 fi
+
+# 4. Fix home ownership for rootless-built images
+#    Rootless builds pack the filesystem as an unprivileged user, so /home/ld
+#    lands root-owned in the image; hand it back to the 'ld' account (uid 1000).
+#    No-op for root-built images.
+LD_UID=$(awk -F: '$1 == "ld" {print $3}' /etc/passwd 2>/dev/null || true)
+LD_GID=$(awk -F: '$1 == "ld" {print $4}' /etc/passwd 2>/dev/null || true)
+LD_GID="${LD_GID:-$LD_UID}"
+if [ -n "$LD_UID" ] && [ -d /home/ld ]; then
+    CURRENT_OWNER=$(stat -c '%u:%g' /home/ld 2>/dev/null || true)
+    if [ "$CURRENT_OWNER" != "${LD_UID}:${LD_GID}" ]; then
+        chown -R "$LD_UID:$LD_GID" /home/ld 2>/dev/null || warn "could not fix /home/ld ownership"
+        log "fixed /home/ld ownership (${CURRENT_OWNER} -> ${LD_UID}:${LD_GID})"
+    fi
+fi
+
+# 5. Restore gid-based setgid ownership for rootless-built images
+#    Package extraction without a full gid map leaves group-privileged
+#    binaries owned by root:root (setgid bit intact, group lost). Restore
+#    their group so e.g. PAM's unix_chkpwd can read /etc/shadow for
+#    non-root password logins. No-op for root-built images and Alpine.
+restore_group() {
+    path="$1"; group="$2"
+    [ -e "$path" ] || return 0
+    want_gid=$(awk -F: -v g "$group" '$1 == g {print $3}' /etc/group 2>/dev/null)
+    [ -n "$want_gid" ] || return 0
+    if [ "$(stat -c '%g' "$path" 2>/dev/null)" != "$want_gid" ]; then
+        chgrp "$group" "$path" 2>/dev/null || warn "could not restore $group group on $path"
+    fi
+}
+restore_group /usr/sbin/unix_chkpwd shadow
+restore_group /usr/bin/expiry shadow
+restore_group /usr/bin/chage shadow
+restore_group /usr/bin/crontab crontab
+restore_group /var/spool/cron/crontabs crontab
+restore_group /usr/bin/wall tty
+restore_group /usr/bin/write tty
+restore_group /var/run/utmp utmp
+restore_group /var/log/lastlog utmp

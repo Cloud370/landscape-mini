@@ -39,6 +39,34 @@ If you already know you want to build locally, debug, or validate unpushed chang
 
 ### Local Build
 
+Builds run **rootless by default**: chroot-style steps go through Linux user
+namespaces, so no `sudo`, loop devices, or mounts are needed (running as root
+still works). Requirements: Linux with unprivileged user namespaces enabled
+plus `make deps` (which installs `uidmap` and `proot`). Together with the
+`/etc/subuid` + `/etc/subgid` ranges that Debian/Ubuntu grant human users by
+default, the build maps those delegated ids into its namespace so dpkg's
+group ownerships (shadow, crontab, ...) land natively — Debian chroot keeps
+native speed; `proot` is the fallback for hosts without user namespaces or
+subid delegation, where package phases run noticeably slower. Ubuntu 24.04+
+confines unprivileged user namespaces behind AppArmor — run
+`sudo sysctl kernel.apparmor_restrict_unprivileged_userns=0` (or boot with
+that sysctl) for the native-speed engine. macOS users should build inside a
+Linux VM or container.
+
+Not sure whether your machine qualifies — or whether you are inside a
+confined sandbox/CI container? Run `make doctor`: a read-only self-check
+that prints which engine each base system would pick on this machine and
+why. Without a clone, the three probes behind it are:
+
+```bash
+grep NoNewPrivs /proc/self/status   # 0 = not confined (1 blocks setuid helpers)
+unshare --user --map-root-user -- true && echo "userns OK"
+unshare --user --map-root-user --map-auto -- true && echo "subid mapping OK (native-speed Debian)"
+```
+
+The build itself picks the engine automatically at startup and explains any
+fallback in its log.
+
 Local configuration is layered with this precedence:
 
 `build.env < build.env.<profile> < build.env.local < explicit environment variables`

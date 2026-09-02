@@ -337,7 +337,7 @@ jobs:
       release_channel: custom-build-fixed
       release_tag: custom-build-latest
       repository_owner: ${{ github.repository_owner }}
-      build_timeout_minutes: 10
+      build_timeout_minutes: 20
 
   publish-fixed-release:
     needs: build

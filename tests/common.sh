@@ -174,7 +174,7 @@ detect_kvm() {
 
 detect_ovmf_firmware() {
     local path
-    for path in /usr/share/ovmf/OVMF.fd /usr/share/OVMF/OVMF_CODE.fd /usr/share/edk2/ovmf/OVMF_CODE.fd; do
+    for path in /usr/share/ovmf/OVMF.fd /usr/share/OVMF/OVMF_CODE.fd /usr/share/edk2/ovmf/OVMF_CODE.fd /usr/share/edk2-ovmf/x64/OVMF_CODE.4m.fd /usr/share/qemu/ovmf-x86_64.bin; do
         if [[ -f "$path" ]]; then
             echo "$path"
             return 0

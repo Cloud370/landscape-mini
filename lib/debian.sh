@@ -4,6 +4,11 @@
 # =============================================================================
 # Provides Debian-specific implementations of the backend_* interface.
 # Sourced by build.sh when BASE_SYSTEM=debian.
+#
+# Bootstrap always runs debootstrap --foreign on the host and executes the
+# second stage through the chroot engine, so the flow is identical for root
+# and rootless builds. The apt archive cache is synced (rsync) instead of
+# bind-mounted, which also works without privileges.
 # =============================================================================
 
 CHROOT_SHELL="/bin/bash"
@@ -12,12 +17,18 @@ CHROOT_SHELL="/bin/bash"
 # Check host dependencies for Debian builds
 # ---------------------------------------------------------------------------
 backend_check_deps() {
-    for cmd in debootstrap parted losetup mkfs.vfat mkfs.ext4 blkid e2fsck resize2fs curl unzip xz sgdisk; do
+    local -a missing=()
+    local cmd
+    for cmd in debootstrap wget; do
         if ! command -v "${cmd}" &>/dev/null; then
-            echo "ERROR: Required command '${cmd}' not found. Please install it first."
-            exit 1
+            missing+=("${cmd}")
         fi
     done
+    if [[ ${#missing[@]} -gt 0 ]]; then
+        echo "ERROR: Required command(s) not found: ${missing[*]} (Debian backend needs debootstrap and wget)." >&2
+        echo "  Debian/Ubuntu: sudo apt-get install debootstrap wget" >&2
+        return 1
+    fi
 }
 
 # =============================================================================
@@ -27,29 +38,69 @@ backend_bootstrap() {
     echo ""
     echo "==== Phase 3: Bootstrapping Debian (${DEBIAN_RELEASE}) ===="
 
-    echo "  Running debootstrap --variant=minbase ..."
-    retry_command 3 5 \
-        debootstrap \
-        --variant=minbase \
-        --include=systemd,systemd-sysv,dbus \
-        "${DEBIAN_RELEASE}" \
-        "${ROOTFS_DIR}" \
-        "${MIRROR}"
+    configure_build_resolver
+
+    echo "  Running debootstrap --foreign --variant=minbase ..."
+    # Rootless: the build namespace only maps gid 0, so tar's chown of
+    # package files owned by other groups (e.g. setgid-shadow unix_chkpwd)
+    # fails with EINVAL. --no-same-owner keeps everything mapped-root in
+    # the tree; gid-based setgid ownership is restored on first boot.
+    local deb_extract_env=()
+    if [[ "${BUILD_PRIVILEGE}" == "rootless" ]]; then
+        deb_extract_env=(env TAR_OPTIONS=--no-same-owner)
+    fi
+    # debootstrap cannot resume over a partially bootstrapped tree, so both
+    # the retry wrapper and a rebuild after a failed build must start clean;
+    # otherwise extraction dies on "File exists" residue.
+    bootstrap_once() {
+        # Defensive: a SIGKILLed previous chroot-engine run can leave
+        # debootstrap's self-mounted /proc behind, which would make the
+        # wipe below fail with EBUSY inside the retry (silently).
+        umount_chroot_fs
+        wipe_rootfs_tree
+        run_as_build_root \
+            "${deb_extract_env[@]}" \
+            debootstrap \
+            --variant=minbase \
+            --foreign \
+            --include=systemd,systemd-sysv,dbus \
+            "${DEBIAN_RELEASE}" \
+            "${ROOTFS_DIR}" \
+            "${MIRROR}"
+
+        echo "  Running debootstrap second stage (chroot engine: ${CHROOT_ENGINE}) ..."
+        # DEBOOTSTRAP_DIR: the second-stage script locates its functions file via
+        # `[ -x /debootstrap/debootstrap ]`; under proot that probe can see the
+        # host root and pick /usr/share/debootstrap, so pin the in-tree path.
+        run_rootfs_cmd \
+            "DEBOOTSTRAP_DIR=/debootstrap /debootstrap/debootstrap --second-stage"
+    }
+    # Retrying the whole bootstrap (not just the second stage) on purpose:
+    # dpkg cannot resume a half-configured tree, so a partial second stage
+    # must be wiped and re-extracted from scratch.
+    retry_command 3 5 bootstrap_once
 
     echo "  Phase 3 complete."
 }
 
 # ---------------------------------------------------------------------------
-# Persistent apt archive cache (host-side, survives `make clean`)
+# Persistent apt archive cache (host-side, survives `make clean`).
+# Synchronised into the rootfs before apt runs and back afterwards — no bind
+# mounts, so it works identically for root and rootless builds.
 # ---------------------------------------------------------------------------
-setup_apt_cache_mount() {
-    mkdir -p "${CACHE_DIR}/apt/partial" "${ROOTFS_DIR}/var/cache/apt/archives"
-    mount --bind "${CACHE_DIR}/apt" "${ROOTFS_DIR}/var/cache/apt/archives"
-    echo "  Apt archive cache mounted: ${CACHE_DIR}/apt"
+sync_apt_cache_in() {
+    mkdir -p "${CACHE_DIR}/apt/partial" "${ROOTFS_DIR}/var/cache/apt/archives/partial"
+    rsync -a --exclude 'lock' --exclude 'partial/' \
+        "${CACHE_DIR}/apt/" "${ROOTFS_DIR}/var/cache/apt/archives/" 2>/dev/null || true
+    echo "  Apt archive cache synced in: ${CACHE_DIR}/apt"
 }
 
-umount_apt_cache() {
-    umount "${ROOTFS_DIR}/var/cache/apt/archives" 2>/dev/null || true
+sync_apt_cache_out() {
+    # _apt-created archive files carry delegated ids in rootless builds; the
+    # mapped namespace reads them as root so the host cache stays complete.
+    run_uid_mapped rsync -a --exclude 'lock' --exclude 'partial/' \
+        "${ROOTFS_DIR}/var/cache/apt/archives/" "${CACHE_DIR}/apt/" 2>/dev/null || true
+    echo "  Apt archive cache synced out: ${CACHE_DIR}/apt"
 }
 
 # =============================================================================
@@ -59,11 +110,11 @@ backend_configure() {
     echo ""
     echo "==== Phase 4: Configuring System (Debian) ===="
 
-    # Mount bind filesystems for chroot
+    # Mount bind filesystems for the classic chroot engine (no-op otherwise)
     mount_chroot_fs
 
     # Persistent package cache for faster rebuilds
-    setup_apt_cache_mount
+    sync_apt_cache_in
 
     # ---- APT sources.list ----
     echo "  Writing /etc/apt/sources.list ..."
@@ -84,15 +135,10 @@ EOF
 
     # ---- fstab ----
     echo "  Writing /etc/fstab ..."
-    local ROOT_UUID
-    local EFI_UUID
-    ROOT_UUID=$(blkid -s UUID -o value "${LOOP_DEV}p3")
-    EFI_UUID=$(blkid -s UUID -o value "${LOOP_DEV}p2")
-
     cat > "${ROOTFS_DIR}/etc/fstab" <<EOF
 # <filesystem>                          <mount>     <type>  <options>           <dump>  <pass>
 UUID=${ROOT_UUID}   /           ext4    errors=remount-ro   0       1
-UUID=${EFI_UUID}    /boot/efi   vfat    umask=0077          0       2
+UUID=$(esp_uuid_pretty)    /boot/efi   vfat    umask=0077          0       2
 EOF
 
     # ---- Prevent docs/locale from ever being installed ----
@@ -107,10 +153,13 @@ path-exclude /usr/share/locale/*
 path-include /usr/share/locale/en*
 EOF
 
-    # ---- Set initramfs to dep mode with explicit boot modules ----
-    echo "  Configuring initramfs MODULES=dep ..."
-    mkdir -p "${ROOTFS_DIR}/etc/initramfs-tools/conf.d"
-    echo "MODULES=dep" > "${ROOTFS_DIR}/etc/initramfs-tools/conf.d/modules-dep"
+    # ---- Seed the explicit boot module list ----
+    # MODULES=dep is only switched on after the packages are installed: the
+    # linux-image postinst generates the first initrd with the default
+    # MODULES=most, whose dep-mode device-for-/ lookup cannot resolve a root
+    # device inside chroots on overlayfs-backed roots (Docker builders).
+    echo "  Configuring initramfs boot modules ..."
+    mkdir -p "${ROOTFS_DIR}/etc/initramfs-tools"
     cat > "${ROOTFS_DIR}/etc/initramfs-tools/modules" <<'EOF'
 # Storage drivers (virtio for QEMU/KVM, ahci/ata for bare metal)
 ext4
@@ -140,7 +189,7 @@ EOF
 
     # ---- Install packages ----
     echo "  Installing packages (this may take a while) ..."
-    run_in_chroot_retry 3 5 "
+    run_rootfs_cmd_retry 3 5 "
         export DEBIAN_FRONTEND=noninteractive
         apt-get \
             -o Acquire::Retries=3 \
@@ -158,8 +207,6 @@ EOF
             firmware-realtek \
             firmware-bnx2 \
             firmware-bnx2x \
-            grub-efi-amd64 \
-            grub-pc-bin \
             initramfs-tools \
             e2fsprogs \
             zstd \
@@ -187,8 +234,16 @@ EOF
             iperf3
     "
 
+    # ---- Switch initramfs to dep mode with the explicit module list ----
+    echo "  Configuring initramfs MODULES=dep ..."
+    mkdir -p "${ROOTFS_DIR}/etc/initramfs-tools/conf.d"
+    echo "MODULES=dep" > "${ROOTFS_DIR}/etc/initramfs-tools/conf.d/modules-dep"
+
     # ---- GRUB configuration ----
-    echo "  Configuring GRUB ..."
+    # The bootloader itself is installed host-side in Phase 7 (offline image
+    # assembly); only the defaults file is written into the rootfs.
+    echo "  Writing /etc/default/grub ..."
+    mkdir -p "${ROOTFS_DIR}/etc/default"
     cat > "${ROOTFS_DIR}/etc/default/grub" <<'EOF'
 GRUB_DEFAULT=0
 GRUB_TIMEOUT=3
@@ -200,22 +255,9 @@ GRUB_TERMINAL_OUTPUT="serial"
 GRUB_SERIAL_COMMAND="serial --speed=115200 --unit=0 --word=8 --parity=no --stop=1"
 EOF
 
-    run_in_chroot "
-        grub-install \
-            --target=x86_64-efi \
-            --efi-directory=/boot/efi \
-            --bootloader-id=landscape \
-            --removable \
-            --no-nvram
-        grub-install \
-            --target=i386-pc \
-            ${LOOP_DEV}
-        update-grub
-    "
-
     # ---- Timezone ----
     echo "  Setting timezone to ${TIMEZONE} ..."
-    run_in_chroot "ln -sf /usr/share/zoneinfo/${TIMEZONE} /etc/localtime"
+    run_rootfs_cmd "ln -sf /usr/share/zoneinfo/${TIMEZONE} /etc/localtime"
 
     # ---- Locale ----
     echo "  Configuring locale (${LOCALE}) ..."
@@ -249,7 +291,7 @@ EOF
 
     if [[ "${needs_locales_package}" == "true" ]]; then
         echo "  Installing locale support ..."
-        run_in_chroot_retry 3 5 "
+        run_rootfs_cmd_retry 3 5 "
             export DEBIAN_FRONTEND=noninteractive
             apt-get \
                 -o Acquire::Retries=3 \
@@ -258,7 +300,7 @@ EOF
                 install -y --no-install-recommends locales
         "
         printf '%b' "${locale_gen_entries}" > "${ROOTFS_DIR}/etc/locale.gen"
-        run_in_chroot "locale-gen"
+        run_rootfs_cmd "locale-gen"
     fi
 
     cat > "${ROOTFS_DIR}/etc/default/locale" <<EOF
@@ -268,18 +310,32 @@ EOF
 
     # ---- Root password ----
     echo "  Setting root password ..."
-    run_in_chroot "echo 'root:${ROOT_PASSWORD}' | chpasswd"
+    run_rootfs_cmd "echo 'root:${ROOT_PASSWORD}' | chpasswd"
 
-    # ---- Create user 'ld' ----
+    # ---- Create user 'ld' (fixed uid 1000) ----
+    # Rootless builds cannot chown to unmapped uids, so the home directory is
+    # created host-side (owned by the build user) and fixed up on first boot
+    # by the expand-rootfs service.
     echo "  Creating user 'ld' ..."
-    run_in_chroot "
-        useradd -m -s /bin/bash -G sudo ld
-        echo 'ld:${ROOT_PASSWORD}' | chpasswd
-    "
+    if [[ "${BUILD_PRIVILEGE}" == "root" ]]; then
+        run_rootfs_cmd "
+            useradd -m -u 1000 -s /bin/bash -G sudo ld
+            echo 'ld:${ROOT_PASSWORD}' | chpasswd
+        "
+    else
+        run_rootfs_cmd "
+            useradd -M -u 1000 -s /bin/bash -G sudo ld
+            echo 'ld:${ROOT_PASSWORD}' | chpasswd
+        "
+        mkdir -p "${ROOTFS_DIR}/home/ld"
+        if [[ -d "${ROOTFS_DIR}/etc/skel" ]]; then
+            cp -a "${ROOTFS_DIR}/etc/skel/." "${ROOTFS_DIR}/home/ld/"
+        fi
+    fi
 
     # ---- Enable sshd ----
     echo "  Enabling sshd ..."
-    run_in_chroot "systemctl enable ssh.service"
+    run_rootfs_cmd "systemctl enable ssh.service"
 
     # ---- Clear default login banners ----
     echo "  Clearing default login banners ..."
@@ -320,7 +376,7 @@ EOF
 
     # ---- Disable unnecessary network services ----
     echo "  Disabling conflicting network services ..."
-    run_in_chroot "
+    run_rootfs_cmd "
         systemctl disable systemd-resolved 2>/dev/null || true
         systemctl mask systemd-resolved 2>/dev/null || true
         systemctl mask NetworkManager 2>/dev/null || true
@@ -341,6 +397,8 @@ EOF
 
     # ---- Image default DNS resolver ----
     configure_image_resolver
+
+    sync_apt_cache_out
 
     echo "  Phase 4 complete."
 }
@@ -378,9 +436,9 @@ EOF
 
     # Enable services
     echo "  Enabling landscape-router.service ..."
-    run_in_chroot "systemctl enable landscape-router.service"
+    run_rootfs_cmd "systemctl enable landscape-router.service"
     echo "  Enabling expand-rootfs.service ..."
-    run_in_chroot "systemctl enable expand-rootfs.service"
+    run_rootfs_cmd "systemctl enable expand-rootfs.service"
 }
 
 # =============================================================================
@@ -399,8 +457,10 @@ backend_install_docker() {
     # ---- Build-time DNS resolver ----
     configure_build_resolver
 
+    sync_apt_cache_in
+
     # Install prerequisites
-    run_in_chroot_retry 3 5 "
+    run_rootfs_cmd_retry 3 5 "
         export DEBIAN_FRONTEND=noninteractive
         apt-get \
             -o Acquire::Retries=3 \
@@ -412,7 +472,7 @@ backend_install_docker() {
 
     # Add Docker GPG key
     echo "  Adding Docker GPG key from ${RESOLVED_DOCKER_APT_GPG_URL} ..."
-    run_in_chroot_retry 3 5 "
+    run_rootfs_cmd_retry 3 5 "
         curl -fsSL --retry 3 --retry-delay 2 '${RESOLVED_DOCKER_APT_GPG_URL}' -o /etc/apt/keyrings/docker.asc
         chmod a+r /etc/apt/keyrings/docker.asc
     "
@@ -420,8 +480,8 @@ backend_install_docker() {
     # Add Docker repository
     echo "  Adding Docker repository ${RESOLVED_DOCKER_APT_MIRROR} ..."
     local ARCH
-    ARCH=$(run_in_chroot "dpkg --print-architecture")
-    run_in_chroot_retry 3 5 "
+    ARCH=$(run_rootfs_cmd "dpkg --print-architecture")
+    run_rootfs_cmd_retry 3 5 "
         echo 'deb [arch=${ARCH} signed-by=/etc/apt/keyrings/docker.asc] ${RESOLVED_DOCKER_APT_MIRROR} ${DEBIAN_RELEASE} stable' \
             > /etc/apt/sources.list.d/docker.list
         apt-get \
@@ -433,7 +493,7 @@ backend_install_docker() {
 
     # Install Docker packages
     echo "  Installing Docker packages ..."
-    run_in_chroot_retry 3 5 "
+    run_rootfs_cmd_retry 3 5 "
         export DEBIAN_FRONTEND=noninteractive
         apt-get \
             -o Acquire::Retries=3 \
@@ -459,7 +519,9 @@ EOF
 
     # Enable Docker service
     echo "  Enabling Docker service ..."
-    run_in_chroot "systemctl enable docker.service"
+    run_rootfs_cmd "systemctl enable docker.service"
+
+    sync_apt_cache_out
 
     # ---- Image default DNS resolver ----
     configure_image_resolver
@@ -471,20 +533,20 @@ EOF
 # Phase 7 backend: Debian-specific cleanup
 # ---------------------------------------------------------------------------
 backend_cleanup() {
-    # Detach the persistent apt cache before cleaning, so `apt-get clean`
+    # Sync archives back to the host cache before cleaning, so `apt-get clean`
     # cannot wipe the host-side cache used by later rebuilds.
-    umount_apt_cache
+    sync_apt_cache_out
 
     # ---- Rebuild initramfs with fewer modules ----
     echo "  Rebuilding smaller initramfs ..."
-    run_in_chroot "
+    run_rootfs_cmd "
         KVER=\$(ls /usr/lib/modules/ | head -1)
         update-initramfs -u -k \"\$KVER\" 2>/dev/null || true
     "
 
     # ---- Aggressive locale/i18n cleanup ----
     echo "  Cleaning locale and i18n data ..."
-    run_in_chroot "
+    run_rootfs_cmd "
         export DEBIAN_FRONTEND=noninteractive
         if [ \"${LOCALE}\" = \"C.UTF-8\" ] && [ -z \"${EXTRA_LOCALES}\" ]; then
             # Remove locale generation packages when the image stays on glibc's built-in C.UTF-8 only
@@ -522,7 +584,7 @@ backend_cleanup() {
     # Note: do NOT purge initramfs-tools — it breaks linux-image dependency
     # chain and makes apt unusable on the running system.
     echo "  Purging build-only packages ..."
-    run_in_chroot "
+    run_rootfs_cmd "
         export DEBIAN_FRONTEND=noninteractive
         dpkg --purge --force-depends \
             grub-efi-amd64 grub-efi-amd64-bin grub-efi-amd64-unsigned \
@@ -533,7 +595,7 @@ backend_cleanup() {
 
     # ---- General apt cleanup ----
     echo "  Cleaning apt caches ..."
-    run_in_chroot "
+    run_rootfs_cmd "
         apt-get clean
         rm -rf /var/lib/apt/lists/*
         # Keep Dpkg/ and Debconf/ modules (~500KB) so apt/dpkg-reconfigure still work
@@ -541,4 +603,25 @@ backend_cleanup() {
             ! -name 'Dpkg' ! -name 'Dpkg.pm' ! -name 'Debconf' \
             -exec rm -rf {} + 2>/dev/null || true
     "
+}
+
+# ---------------------------------------------------------------------------
+# GRUB hooks for the host-side grub.cfg renderer
+# ---------------------------------------------------------------------------
+backend_grub_kernel_path() {
+    local kernel
+    kernel=$(ls "${ROOTFS_DIR}/boot/vmlinuz-"* 2>/dev/null | head -1)
+    [[ -n "${kernel}" ]] || return 1
+    echo "/boot/$(basename "${kernel}")"
+}
+
+backend_grub_initrd_path() {
+    local initrd
+    initrd=$(ls "${ROOTFS_DIR}/boot/initrd.img-"* 2>/dev/null | head -1)
+    [[ -n "${initrd}" ]] || return 1
+    echo "/boot/$(basename "${initrd}")"
+}
+
+backend_grub_cmdline_extra() {
+    echo "net.ifnames=0 biosdevname=0 nomodeset console=ttyS0,115200n8"
 }

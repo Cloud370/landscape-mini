@@ -96,7 +96,7 @@ on:
       build_timeout_minutes:
         required: false
         type: number
-        default: 4
+        default: 20
     outputs:
       resolved_version:
         value: ${{ jobs.build_image.outputs.resolved_version }}
@@ -254,11 +254,13 @@ jobs:
             -o Acquire::Retries=3 \
             -o Acquire::http::Timeout=60 \
             -o Acquire::https::Timeout=60 \
-            install -y debootstrap parted dosfstools e2fsprogs \
-            grub-efi-amd64-bin grub-pc-bin qemu-utils rsync curl
+            install -y debootstrap dosfstools e2fsprogs gdisk mtools \
+            grub-efi-amd64-bin grub-pc-bin qemu-utils rsync wget \
+            curl unzip xz-utils proot uidmap
 
       - name: Build image (${{ inputs.base_system }}, docker=${{ inputs.include_docker }})
-        timeout-minutes: 9
+        # Two timeout-wrapped attempts of build_timeout_minutes each, plus headroom.
+        timeout-minutes: 45
         env:
           RESOLVED_VERSION: ${{ steps.meta.outputs.resolved_version }}
           EFFECTIVE_CONFIG_PATH: ${{ github.workspace }}/output/metadata/effective-landscape_init.toml
@@ -277,6 +279,16 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+
+          # Ubuntu 24.04+ confines unprivileged user namespaces behind
+          # AppArmor; without this the engine probe falls back to proot,
+          # whose ptrace path translation does not work on hosted runners.
+          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0 >/dev/null 2>&1 || true
+          # subid delegation for the full-mapping namespace (native-speed
+          # rootless chroot); ubuntu images normally ship this already.
+          if ! grep -q "^runner:" /etc/subgid 2>/dev/null; then
+            echo "runner:100000:65536" | sudo tee -a /etc/subuid /etc/subgid >/dev/null
+          fi
 
           version_flag=()
           if [ -n "${RESOLVED_VERSION}" ]; then
@@ -297,7 +309,7 @@ jobs:
 
           run_build() {
             timeout --foreground "${{ inputs.build_timeout_minutes }}m" \
-              sudo APT_MIRROR="" ALPINE_MIRROR="" \
+              env APT_MIRROR="" ALPINE_MIRROR="" \
               EFFECTIVE_CONFIG_PATH="${EFFECTIVE_CONFIG_PATH}" \
               EFFECTIVE_CONFIG_PROFILE="${EFFECTIVE_CONFIG_PROFILE}" \
               EFFECTIVE_TOPOLOGY_SOURCE="${EFFECTIVE_TOPOLOGY_SOURCE}" \
@@ -328,16 +340,12 @@ jobs:
             fi
 
             echo "Build attempt ${attempt} failed with status ${status}; resetting workspace and retrying..." >&2
-            sudo rm -rf work
-            sudo rm -f output/*.img output/*.vmdk output/*.ova output/metadata/build-metadata.txt
+            rm -rf work
+            rm -f output/*.img output/*.vmdk output/*.ova output/metadata/build-metadata.txt
             mkdir -p output/metadata
             cp "$config_backup" "${EFFECTIVE_CONFIG_PATH}"
             attempt=$((attempt + 1))
           done
-
-      - name: Fix output permissions
-        run: |
-          sudo chown -R "$(id -u):$(id -g)" output/ work/ .cache/ 2>/dev/null || true
 
       - name: Capture artifact metadata
         env:
