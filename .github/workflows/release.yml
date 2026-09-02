@@ -15,15 +15,24 @@ jobs:
     outputs:
       release_tag: ${{ steps.meta.outputs.release_tag }}
       target_sha: ${{ steps.meta.outputs.target_sha }}
+      is_prerelease: ${{ steps.meta.outputs.is_prerelease }}
     steps:
       - name: Resolve release metadata
         id: meta
         shell: bash
         run: |
           set -euo pipefail
+          # -alpha/-beta/-rc/-preview tags publish as prereleases and never
+          # take over the "latest" pointer.
+          if [[ "${GITHUB_REF_NAME}" =~ -(alpha|beta|rc|preview)(\.|$) ]]; then
+            is_prerelease=true
+          else
+            is_prerelease=false
+          fi
           {
             echo "release_tag=${GITHUB_REF_NAME}"
             echo "target_sha=${GITHUB_SHA}"
+            echo "is_prerelease=${is_prerelease}"
           } >> "$GITHUB_OUTPUT"
 
   build_debian_no_docker:
@@ -69,13 +78,13 @@ jobs:
       contents: write
     steps:
       - name: Download Debian no-Docker artifact
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           name: ${{ needs.build_debian_no_docker.outputs.image_artifact }}
           path: artifacts/debian-no-docker/
 
       - name: Download Debian Docker artifact
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           name: ${{ needs.build_debian_docker.outputs.image_artifact }}
           path: artifacts/debian-docker/
@@ -197,9 +206,11 @@ jobs:
           } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Create GitHub Release
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3
         with:
           files: |
             artifacts/**/*.img.gz
             artifacts/**/*.ova
           generate_release_notes: true
+          prerelease: ${{ needs.prepare.outputs.is_prerelease == 'true' }}
+          make_latest: ${{ needs.prepare.outputs.is_prerelease == 'false' }}
