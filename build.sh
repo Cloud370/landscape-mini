@@ -140,7 +140,7 @@ RUN_TEST="${RUN_TEST:-}"
 RELEASE_CHANNEL="${RELEASE_CHANNEL:-local}"
 RELEASE_TAG="${RELEASE_TAG:-}"
 REPOSITORY_OWNER="${REPOSITORY_OWNER:-}"
-INCLUDE_LKIT="${INCLUDE_LKIT:-false}"
+INCLUDE_LKIT="${INCLUDE_LKIT:-true}"
 LKIT_REPO="${LKIT_REPO:-https://github.com/landscape-router/landscape-kit}"
 LKIT_VERSION="${LKIT_VERSION:-latest}"
 
@@ -426,8 +426,10 @@ validate_base_system "${BASE_SYSTEM}"
 validate_include_docker "${INCLUDE_DOCKER}"
 validate_include_lkit "${INCLUDE_LKIT}"
 if [[ "${INCLUDE_LKIT}" == "true" && "${BASE_SYSTEM}" != "debian" ]]; then
-    echo "ERROR: INCLUDE_LKIT=true requires BASE_SYSTEM=debian (lkit manages systemd units)." >&2
-    exit 1
+    echo "  [WARN] INCLUDE_LKIT=true supports Debian only (lkit manages systemd units)." >&2
+    echo "  [WARN] Continuing this ${BASE_SYSTEM} build WITHOUT lkit (legacy layout)." >&2
+    echo "  [WARN] Set INCLUDE_LKIT=false to silence this notice." >&2
+    INCLUDE_LKIT=false
 fi
 normalize_output_formats
 normalize_run_test_selection

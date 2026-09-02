@@ -110,9 +110,11 @@ make ssh
 - Common build env overrides:
   - `BASE_SYSTEM`
   - `INCLUDE_DOCKER`
-  - `INCLUDE_LKIT` (build-time landscape-kit embedding: lkit-managed layout
-    `/root/.lkit/landscape` + `/usr/local/bin/lkit` + canonical lkit units,
-    Debian only; `LKIT_REPO` / `LKIT_VERSION` select the release)
+  - `INCLUDE_LKIT` (default `true`: embed landscape-kit — lkit-managed layout
+    `/root/.lkit/landscape`, global `/usr/local/bin/lkit`, canonical lkit
+    units, SSH welcome guidance; Debian only, other base systems warn and
+    fall back to the legacy layout; `LKIT_REPO` / `LKIT_VERSION` select the
+    release)
   - `OUTPUT_FORMATS`
   - `ROOT_PASSWORD`
   - `LANDSCAPE_ADMIN_USER`

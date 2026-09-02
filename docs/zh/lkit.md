@@ -1,22 +1,25 @@
 # 内置 landscape-kit（lkit）
 
-默认镜像使用 legacy 布局：`/root/landscape-webserver` 由一个写死的 systemd unit 直接启动。开启 `INCLUDE_LKIT` 后，构建期会把 [landscape-kit](https://github.com/landscape-router/landscape-kit)（`lkit`）与它管理的 Landscape 布局一起内置进镜像 —— 用户不需要在系统装好后再手动安装 / 迁移，首次开机起部署就归 lkit 接管。
+Debian 镜像**默认内置** [landscape-kit](https://github.com/landscape-router/landscape-kit)（`lkit`）及它管理的 Landscape 布局 —— 无需在系统装好后再手动安装 / 迁移，首次开机起部署就归 lkit 接管；`lkit` 全局命令对所有用户可用（`/usr/local/bin/lkit`，位于标准 `PATH`），SSH 登录的欢迎信息也会检测到 lkit 并给出常用命令引导。需要 legacy 布局（`/root/landscape-webserver` 由写死的 systemd unit 直接启动）时设置 `INCLUDE_LKIT=false`；非 Debian 构建始终使用 legacy 布局并打印提示。
 
 ```bash
-# 本地构建（仅 Debian）
-INCLUDE_LKIT=true make build
+# 本地构建（Debian）：默认已内置 lkit
+make build
 
 # 指定 landscape-kit 版本
-INCLUDE_LKIT=true LKIT_VERSION=v0.5.0 make build
+LKIT_VERSION=v0.5.0 make build
 
-# GitHub Actions：Custom Build 工作流勾选 include_lkit 即可
+# 改用 legacy 布局
+INCLUDE_LKIT=false make build
+
+# GitHub Actions：Custom Build 工作流的 include_lkit 默认开启
 ```
 
 ## 相关变量
 
 | 变量 | 默认值 | 说明 |
 |------|--------|------|
-| `INCLUDE_LKIT` | `false` | 构建期内置 landscape-kit：`true` / `false`，仅支持 `BASE_SYSTEM=debian` |
+| `INCLUDE_LKIT` | `true` | 构建期内置 landscape-kit：`true` / `false`，仅 Debian（其余基座自动回退 legacy 布局并提示） |
 | `LKIT_REPO` | `https://github.com/landscape-router/landscape-kit` | landscape-kit 发布仓库 |
 | `LKIT_VERSION` | `latest` | landscape-kit 版本，`latest` 会解析成具体 tag 再下载缓存 |
 

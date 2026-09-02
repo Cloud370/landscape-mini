@@ -268,7 +268,7 @@ Avoid using tracked `build.env` as the day-to-day customization entry point. Pre
 |------|--------|------|
 | `BASE_SYSTEM` | `debian` | Base system: `debian` / `alpine` |
 | `INCLUDE_DOCKER` | `false` | Include Docker: `true` / `false` |
-| `INCLUDE_LKIT` | `false` | Embed landscape-kit at build time (lkit layout, Debian only); see [Embedding lkit](./lkit.md) |
+| `INCLUDE_LKIT` | `true` | Embed landscape-kit at build time (lkit layout, Debian only; other bases fall back to legacy); see [Embedding lkit](./lkit.md) |
 | `LKIT_VERSION` | `latest` | landscape-kit version; `latest` is resolved to a concrete tag |
 | `LKIT_REPO` | `https://github.com/landscape-router/landscape-kit` | landscape-kit release repository |
 | `OUTPUT_FORMATS` | `img` | Output formats: `img`, `vmdk`, `ova` (comma-separated) |

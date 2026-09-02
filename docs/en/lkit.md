@@ -1,22 +1,25 @@
 # Embedding landscape-kit (lkit)
 
-The default image uses the legacy layout: `/root/landscape-webserver` started directly by a fixed systemd unit. With `INCLUDE_LKIT` enabled, the build embeds [landscape-kit](https://github.com/landscape-router/landscape-kit) (`lkit`) together with the Landscape layout it manages — no manual install / migrate step after provisioning; lkit owns the deployment from the first boot.
+Debian images embed [landscape-kit](https://github.com/landscape-router/landscape-kit) (`lkit`) **by default**, together with the Landscape layout it manages — no manual install / migrate step after provisioning; lkit owns the deployment from the first boot. The `lkit` command is globally available to every user (`/usr/local/bin/lkit`, on the standard `PATH`), and the SSH login banner detects lkit and prints quick-command guidance. Set `INCLUDE_LKIT=false` to build the legacy layout instead (`/root/landscape-webserver` started directly by a fixed systemd unit); non-Debian builds always use the legacy layout and print a notice.
 
 ```bash
-# Local build (Debian only)
-INCLUDE_LKIT=true make build
+# Local build (Debian): lkit is embedded by default
+make build
 
 # Pin the landscape-kit version
-INCLUDE_LKIT=true LKIT_VERSION=v0.5.0 make build
+LKIT_VERSION=v0.5.0 make build
 
-# GitHub Actions: tick include_lkit in the Custom Build workflow
+# Legacy layout instead of lkit management
+INCLUDE_LKIT=false make build
+
+# GitHub Actions: include_lkit in the Custom Build workflow defaults to true
 ```
 
 ## Variables
 
 | Variable | Default | Notes |
 |---|---|---|
-| `INCLUDE_LKIT` | `false` | Embed landscape-kit at build time: `true` / `false`; requires `BASE_SYSTEM=debian` |
+| `INCLUDE_LKIT` | `true` | Embed landscape-kit at build time: `true` / `false`; Debian only (other base systems fall back to the legacy layout with a notice) |
 | `LKIT_REPO` | `https://github.com/landscape-router/landscape-kit` | landscape-kit release repository |
 | `LKIT_VERSION` | `latest` | landscape-kit version; `latest` is resolved to a concrete tag before caching |
 

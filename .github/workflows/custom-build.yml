@@ -28,11 +28,11 @@ on:
       include_lkit:
         description: "内置 landscape-kit（编译期嵌入 lkit 布局，仅 Debian）\nEmbed landscape-kit at build time (lkit layout, Debian only)"
         required: true
-        default: 'false'
+        default: 'true'
         type: choice
         options:
-          - 'false'
           - 'true'
+          - 'false'
       lkit_version:
         description: "landscape-kit 版本（留空/latest 用最新；如 v0.5.0）\nlandscape-kit version (empty/latest resolves the newest; e.g. v0.5.0)"
         default: ""
@@ -213,6 +213,7 @@ jobs:
           validate_include_lkit "$INPUT_INCLUDE_LKIT"
           if [ "$INPUT_INCLUDE_LKIT" = "true" ] && [ "$INPUT_BASE_SYSTEM" != "debian" ]; then
             echo "ERROR: include_lkit=true supports Debian only (lkit manages systemd units)." >&2
+            echo "ERROR: re-run with base_system=debian, or switch include_lkit to false (legacy layout)." >&2
             exit 1
           fi
           normalize_output_formats
