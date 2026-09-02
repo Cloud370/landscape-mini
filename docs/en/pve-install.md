@@ -284,6 +284,15 @@ How to fix it:
 2. Make sure **Content** includes `Import` and `Disk image`
 3. If it still fails, switch to a directory-based storage that supports file-based import, or use manual `.img` import instead
 
+### Chinese shows as little boxes in the PVE console
+
+The PVE web console (noVNC) shows the VM's **kernel console** framebuffer. The Linux kernel console font can only load ~512 glyphs — far short of any CJK character set — so every Chinese character renders as a box. This is an inherent kernel-console limitation, not a noVNC or image defect.
+
+For Chinese interaction (e.g. `lkit`'s Chinese TUI) use instead:
+
+- SSH: rendered by your local terminal, full font coverage
+- Landscape's web terminal: rendered by the browser
+
 ### Why does `eth0` not have an IP after boot?
 
 Check these first:
