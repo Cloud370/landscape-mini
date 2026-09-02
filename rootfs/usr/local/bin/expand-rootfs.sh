@@ -151,7 +151,7 @@ fi
 restore_group() {
     path="$1"; group="$2"
     [ -e "$path" ] || return 0
-    want_gid=$(awk -F: -v g "$group" '$1 == g {print $3}' /etc/group 2>/dev/null)
+    want_gid=$(awk -F: -v g="$group" '$1 == g {print $3}' /etc/group 2>/dev/null)
     [ -n "$want_gid" ] || return 0
     if [ "$(stat -c '%g' "$path" 2>/dev/null)" != "$want_gid" ]; then
         chgrp "$group" "$path" 2>/dev/null || warn "could not restore $group group on $path"
