@@ -929,11 +929,14 @@ export_ova() {
     sectors_512=$(( raw_size_bytes / 512 ))
     cpu_cores=2
     memory_mb=2048
-    nic_model="virtio"
-    nic_desc="VirtIO ethernet adapter"
+    # E1000: the only NIC subtype every OVF consumer understands (virtio is a
+    # KVM-ism that VMware importers reject; vmxnet3 needs guest tools). Both
+    # base systems ship the e1000 kernel driver.
+    nic_model="E1000"
+    nic_desc="E1000 ethernet adapter"
 
     if [[ "${BASE_SYSTEM}" == "alpine" ]]; then
-        os_id="101"
+        os_id="100"
         os_desc="Alpine Linux 64-bit"
     else
         os_id="96"
@@ -990,7 +993,7 @@ export_ova() {
         <vssd:ElementName>Virtual Hardware Family</vssd:ElementName>
         <vssd:InstanceID>0</vssd:InstanceID>
         <vssd:VirtualSystemIdentifier>${escaped_vm_name}</vssd:VirtualSystemIdentifier>
-        <vssd:VirtualSystemType>vmx-14</vssd:VirtualSystemType>
+        <vssd:VirtualSystemType>vmx-11</vssd:VirtualSystemType>
       </System>
       <Item>
         <rasd:AllocationUnits>hertz * 10^6</rasd:AllocationUnits>
