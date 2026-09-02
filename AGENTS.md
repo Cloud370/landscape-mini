@@ -199,7 +199,9 @@ It rebuilds both Debian tuples (`include_docker=true/false`) with `img,ova`, val
 
 ## Hard rules
 
-- Branch + PR; avoid direct pushes to `main`.
+- Branch + PR; avoid direct pushes to `main`. Exception: docs-only changes
+  (docs/, README wording, CHANGELOG entries, comments) may be pushed straight
+  to `main`.
 - Changelog discipline: every user-visible change — features, fixes, behavior
   changes, new build env / workflow inputs, breaking changes — must land with a
   bilingual (English + 中文) entry under `[Unreleased]` in `CHANGELOG.md`, in the
