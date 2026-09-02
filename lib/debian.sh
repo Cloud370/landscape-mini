@@ -289,6 +289,14 @@ EOF
         needs_locales_package=true
     done
 
+    # Landscape's web terminal spawns its shell with LC_ALL=en_US.UTF-8;
+    # generate that locale unconditionally so terminal sessions never open
+    # with "bash: warning: setlocale: LC_ALL: cannot change locale".
+    if [[ "${LOCALE}" != "en_US.UTF-8" && "${locale_gen_entries}" != *"en_US.UTF-8"* ]]; then
+        locale_gen_entries+="en_US.UTF-8 UTF-8\n"
+        needs_locales_package=true
+    fi
+
     if [[ "${needs_locales_package}" == "true" ]]; then
         echo "  Installing locale support ..."
         run_rootfs_cmd_retry 3 5 "
@@ -555,7 +563,7 @@ backend_cleanup() {
     echo "  Cleaning locale and i18n data ..."
     run_rootfs_cmd "
         export DEBIAN_FRONTEND=noninteractive
-        if [ \"${LOCALE}\" = \"C.UTF-8\" ] && [ -z \"${EXTRA_LOCALES}\" ]; then
+        if [ \"${LOCALE}\" = \"C.UTF-8\" ] && [ -z \"${EXTRA_LOCALES}\" ] && ! grep -q '^en_US.UTF-8' /etc/locale.gen 2>/dev/null; then
             # Remove locale generation packages when the image stays on glibc's built-in C.UTF-8 only
             apt-get purge -y --auto-remove libc-l10n locales 2>/dev/null || true
         fi

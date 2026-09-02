@@ -284,6 +284,15 @@ sata0: import working storage 'local' does not support 'images' content type or 
 2. 确认“内容”里已勾选：`导入`、`磁盘镜像`
 3. 如果仍失败，改用支持 file-based 的目录型存储，或者改走手动导入 `.img`
 
+### PVE 控制台里中文显示成小方块？
+
+PVE 网页控制台（noVNC）显示的是虚拟机的**内核控制台**画面。Linux 内核控制台字体最多只能加载约 512 个字形，装不下任何 CJK 字符集，所以中文一律渲染成方块 —— 这是内核控制台的固有限制，不是 noVNC 或镜像的问题。
+
+需要中文交互（例如 `lkit` 的中文 TUI）时请改用：
+
+- SSH 登录：由你本地终端渲染，字体齐全
+- Landscape 的 Web 终端：由浏览器渲染
+
 ### 为什么启动后 `eth0` 没有分配 IP？
 
 优先检查：
