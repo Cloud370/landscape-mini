@@ -24,6 +24,9 @@ declare -a CONFIG_ENV_KEYS=(
     BASE_SYSTEM
     LANDSCAPE_VERSION
     LANDSCAPE_REPO
+    INCLUDE_LKIT
+    LKIT_REPO
+    LKIT_VERSION
     DEBIAN_RELEASE
     ALPINE_RELEASE
     IMAGE_SIZE_MB
@@ -137,6 +140,9 @@ RUN_TEST="${RUN_TEST:-}"
 RELEASE_CHANNEL="${RELEASE_CHANNEL:-local}"
 RELEASE_TAG="${RELEASE_TAG:-}"
 REPOSITORY_OWNER="${REPOSITORY_OWNER:-}"
+INCLUDE_LKIT="${INCLUDE_LKIT:-false}"
+LKIT_REPO="${LKIT_REPO:-https://github.com/landscape-router/landscape-kit}"
+LKIT_VERSION="${LKIT_VERSION:-latest}"
 
 declare -a CLI_OUTPUT_FORMATS=()
 declare -a OUTPUT_FORMAT_LIST=()
@@ -193,6 +199,17 @@ validate_include_docker() {
             ;;
         *)
             echo "ERROR: INCLUDE_DOCKER must be 'true' or 'false', got '$1'." >&2
+            exit 1
+            ;;
+    esac
+}
+
+validate_include_lkit() {
+    case "$1" in
+        true|false)
+            ;;
+        *)
+            echo "ERROR: INCLUDE_LKIT must be 'true' or 'false', got '$1'." >&2
             exit 1
             ;;
     esac
@@ -407,6 +424,11 @@ done
 
 validate_base_system "${BASE_SYSTEM}"
 validate_include_docker "${INCLUDE_DOCKER}"
+validate_include_lkit "${INCLUDE_LKIT}"
+if [[ "${INCLUDE_LKIT}" == "true" && "${BASE_SYSTEM}" != "debian" ]]; then
+    echo "ERROR: INCLUDE_LKIT=true requires BASE_SYSTEM=debian (lkit manages systemd units)." >&2
+    exit 1
+fi
 normalize_output_formats
 normalize_run_test_selection
 
@@ -451,6 +473,12 @@ resolve_landscape_release_version
 RESOLVED_LANDSCAPE_VERSION="${RESOLVED_LANDSCAPE_VERSION:-${LANDSCAPE_VERSION}}"
 DOWNLOAD_DIR="${CACHE_DIR}/downloads/${RESOLVED_LANDSCAPE_VERSION}"
 
+resolve_lkit_release_version
+RESOLVED_LKIT_VERSION="${RESOLVED_LKIT_VERSION:-${LKIT_VERSION}}"
+LKIT_DOWNLOAD_DIR="${CACHE_DIR}/downloads/lkit/${RESOLVED_LKIT_VERSION}"
+LKIT_BINARY_FILE="${LKIT_DOWNLOAD_DIR}/lkit-x86_64"
+IMAGE_CREATED_AT="${IMAGE_CREATED_AT:-$(date -u +%Y-%m-%dT%H:%M:%SZ)}"
+
 # Determine download base URL
 if [[ "${RESOLVED_LANDSCAPE_VERSION}" == "latest" ]]; then
     DOWNLOAD_BASE="${LANDSCAPE_REPO}/releases/latest/download"
@@ -461,6 +489,9 @@ fi
 BUILD_NAME="landscape-mini-x86-${BASE_SYSTEM}"
 if [[ "${INCLUDE_DOCKER}" == "true" ]]; then
     BUILD_NAME+="-docker"
+fi
+if [[ "${INCLUDE_LKIT}" == "true" ]]; then
+    BUILD_NAME+="-lkit"
 fi
 
 IMAGE_FILE="${OUTPUT_DIR}/${BUILD_NAME}.img"
@@ -647,6 +678,16 @@ main() {
     echo "  Topology Source   : ${EFFECTIVE_TOPOLOGY_SOURCE}"
     echo "  Run Test          : ${RUN_TEST}"
     echo "  Privilege         : ${BUILD_PRIVILEGE} (engine: ${CHROOT_ENGINE})"
+    if [[ "${INCLUDE_LKIT}" == "true" ]]; then
+        echo "  Include lkit      : true"
+        echo "  lkit Repo         : ${LKIT_REPO}"
+        echo "  lkit Version      : ${LKIT_VERSION}"
+        if [[ "${RESOLVED_LKIT_VERSION}" != "${LKIT_VERSION}" ]]; then
+            echo "  Resolved lkit     : ${RESOLVED_LKIT_VERSION}"
+        fi
+    else
+        echo "  Include lkit      : false"
+    fi
     if [[ -n "${EFFECTIVE_CONFIG_PATH}" ]]; then
         echo "  Effective Config  : ${EFFECTIVE_CONFIG_PATH}"
     fi
