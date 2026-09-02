@@ -264,7 +264,7 @@ bash <(curl -sL https://raw.githubusercontent.com/bin456789/reinstall/main/reins
 |------|--------|------|
 | `BASE_SYSTEM` | `debian` | 基础系统：`debian` / `alpine` |
 | `INCLUDE_DOCKER` | `false` | 是否包含 Docker：`true` / `false` |
-| `INCLUDE_LKIT` | `false` | 构建期内置 landscape-kit（lkit 布局，仅 Debian），详见 [内置 lkit 说明](./lkit.md) |
+| `INCLUDE_LKIT` | `true` | 构建期内置 landscape-kit（lkit 布局，仅 Debian，其余基座自动回退 legacy 布局），详见 [内置 lkit 说明](./lkit.md) |
 | `LKIT_VERSION` | `latest` | landscape-kit 版本，`latest` 自动解析为具体 tag |
 | `LKIT_REPO` | `https://github.com/landscape-router/landscape-kit` | landscape-kit 发布仓库 |
 | `OUTPUT_FORMATS` | `img` | 输出格式列表：`img`、`vmdk`、`ova`，逗号分隔 |

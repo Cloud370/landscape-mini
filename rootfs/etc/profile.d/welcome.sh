@@ -154,4 +154,13 @@ $INTERFACE_LINES
 EOF
 fi
 
+# landscape-kit guidance (only when the build embedded lkit).
+if [ -x /usr/local/bin/lkit ]; then
+  printf '%s[ landscape-kit ]%s\n' "$C_TITLE" "$C_RESET"
+  printf '%s%-14s%s %s%s%s\n' "$C_LABEL" 'Managed by:' "$C_RESET" "$C_VALUE" "lkit (landscape-kit)" "$C_RESET"
+  printf '%s%-14s%s %s%s%s\n' "$C_LABEL" 'Status:' "$C_RESET" "$C_VALUE" "lkit check" "$C_RESET"
+  printf '%s%-14s%s %s%s%s\n' "$C_LABEL" 'Update:' "$C_RESET" "$C_VALUE" "lkit update" "$C_RESET"
+  printf '%s%-14s%s %s%s%s\n' "$C_LABEL" 'More:' "$C_RESET" "$C_VALUE" "lkit --help" "$C_RESET"
+fi
+
 printf '%s========================================%s\n\n' "$C_BORDER" "$C_RESET"

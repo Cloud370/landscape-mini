@@ -24,7 +24,7 @@ on:
       include_lkit:
         required: false
         type: string
-        default: "false"
+        default: "true"
       lkit_version:
         required: false
         type: string
