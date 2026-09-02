@@ -121,6 +121,9 @@ deps-test: ## Install test dependencies (sshpass, socat, curl, jq)
 	sudo apt-get update
 	sudo apt-get install -y sshpass socat curl jq qemu-system-x86 ovmf
 
+doctor: ## Check whether this machine can run the rootless build (read-only probes)
+	bash scripts/check-build-env.sh
+
 # --------------------------------------------------------------------------
 # Build and test targets
 # --------------------------------------------------------------------------

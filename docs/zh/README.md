@@ -41,14 +41,27 @@ Landscape Router 的最小化 x86 镜像构建器。支持 **Debian Trixie** 和
 
 构建默认以**普通用户身份运行（rootless）**：chroot 类操作通过 Linux 用户
 命名空间完成，不再需要 `sudo`、loop 设备或挂载；以 root 身份运行也依然支持。
-要求：Linux（内核支持非特权用户命名空间）+ `make deps` 安装依赖。
-Ubuntu 24.04+ 默认用 AppArmor 限制非特权用户命名空间，执行
-`sudo sysctl kernel.apparmor_restrict_unprivileged_userns=0`（或以该 sysctl
-启动）即可使用原生速度引擎。其中 `uidmap` 配合 Debian/Ubuntu 默认为人类用户分配的
+要求：Linux（内核支持非特权用户命名空间）+ `make deps` 安装依赖（内含
+`uidmap` 与 `proot`）。其中 `uidmap` 配合 Debian/Ubuntu 默认为人类用户分配的
 `/etc/subuid`、`/etc/subgid` 委派范围，构建会把这批 id 映射进命名空间，
 dpkg 的组属主写入（shadow、crontab 等）原生完成，Debian 基座的 chroot
 保持原生速度；`proot` 是无用户命名空间（或无 subid 委派）环境的兜底，
-该路径下包安装阶段会明显变慢。macOS 用户请在 Linux 虚拟机或容器中构建。
+该路径下包安装阶段会明显变慢。Ubuntu 24.04+ 默认用 AppArmor 限制非特权
+用户命名空间，执行
+`sudo sysctl kernel.apparmor_restrict_unprivileged_userns=0`（或以该 sysctl
+启动）即可使用原生速度引擎。macOS 用户请在 Linux 虚拟机或容器中构建。
+
+不确定自己的机器是否满足条件，或者想确认自己是否身处受限的沙箱/CI 容器？
+运行 `make doctor`：只读自检，直接打印本机上各基座会选用的引擎及原因。
+没有仓库克隆时，背后等效的三条探测命令是：
+
+```bash
+grep NoNewPrivs /proc/self/status   # 0 = 未受限（1 会封锁 setuid 助手）
+unshare --user --map-root-user -- true && echo "userns OK"
+unshare --user --map-root-user --map-auto -- true && echo "subid mapping OK（Debian 原生速度）"
+```
+
+构建本身也会在启动时自动探测引擎，并在日志中说明任何降级。
 
 本地配置现在按以下优先级分层加载：
 
