@@ -21,6 +21,14 @@ on:
         required: false
         type: string
         default: ""
+      include_lkit:
+        required: false
+        type: string
+        default: "false"
+      lkit_version:
+        required: false
+        type: string
+        default: ""
       compress_output:
         required: false
         type: string
@@ -150,8 +158,23 @@ jobs:
           if [ "${{ inputs.include_docker }}" = "true" ]; then
             build_name="${build_name}-docker"
           fi
+          if [ "${{ inputs.include_lkit }}" = "true" ]; then
+            build_name="${build_name}-lkit"
+          fi
+
+          case "${{ inputs.include_lkit }}" in
+            true|false) ;;
+            *) echo "Unsupported include_lkit value: ${{ inputs.include_lkit }}" >&2; exit 1 ;;
+          esac
+          if [ "${{ inputs.include_lkit }}" = "true" ] && [ "${{ inputs.base_system }}" != "debian" ]; then
+            echo "include_lkit=true supports Debian only (lkit manages systemd units)" >&2
+            exit 1
+          fi
 
           artifact_tuple="${{ inputs.base_system }}-docker-${{ inputs.include_docker }}"
+          if [ "${{ inputs.include_lkit }}" = "true" ]; then
+            artifact_tuple="${artifact_tuple}-lkit"
+          fi
           artifact_id="${artifact_tuple}-${resolved_version}-${GITHUB_SHA::12}-${GITHUB_RUN_ID}"
           {
             echo "resolved_version=$resolved_version"
@@ -210,7 +233,7 @@ jobs:
         uses: actions/cache@v6
         with:
           path: .cache/downloads
-          key: landscape-downloads-v1-${{ steps.meta.outputs.resolved_version }}-${{ inputs.base_system }}
+          key: landscape-downloads-v1-${{ steps.meta.outputs.resolved_version }}-${{ inputs.base_system }}-lkit-${{ inputs.include_lkit }}-${{ inputs.lkit_version }}
 
       - name: Render effective topology config
         env:
@@ -256,7 +279,11 @@ jobs:
             -o Acquire::https::Timeout=60 \
             install -y debootstrap dosfstools e2fsprogs gdisk mtools \
             grub-efi-amd64-bin grub-pc-bin qemu-utils rsync wget \
-            curl unzip xz-utils proot uidmap
+            curl unzip xz-utils proot uidmap zip jq
+
+      - name: Validate lkit provisioning layout
+        shell: bash
+        run: ./tests/test-lkit-provision.sh
 
       - name: Build image (${{ inputs.base_system }}, docker=${{ inputs.include_docker }})
         # Two timeout-wrapped attempts of build_timeout_minutes each, plus headroom.
@@ -272,6 +299,8 @@ jobs:
           LANDSCAPE_ADMIN_USER_SOURCE: ${{ inputs.api_username_source }}
           LANDSCAPE_ADMIN_PASS: ${{ inputs.api_password }}
           LANDSCAPE_ADMIN_PASS_SOURCE: ${{ inputs.api_password_source }}
+          INCLUDE_LKIT: ${{ inputs.include_lkit }}
+          LKIT_VERSION: ${{ inputs.lkit_version }}
           RUN_TEST: ${{ steps.tests.outputs.run_test }}
           RELEASE_CHANNEL: ${{ inputs.release_channel }}
           RELEASE_TAG: ${{ inputs.release_tag }}
@@ -387,6 +416,8 @@ jobs:
           printf '%s\n' \
             "base_system=${{ inputs.base_system }}" \
             "include_docker=${{ inputs.include_docker }}" \
+            "include_lkit=${{ inputs.include_lkit }}" \
+            "lkit_version=${{ inputs.lkit_version }}" \
             "output_formats=${output_formats:-${{ inputs.output_formats }}}" \
             "run_test=${RUN_TEST}" \
             "produced_files=${produced_files}" \

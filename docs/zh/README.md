@@ -14,6 +14,7 @@ Landscape Router 的最小化 x86 镜像构建器。支持 **Debian Trixie** 和
 |---|---|
 | 直接下载现成镜像 | [Release 页面](https://github.com/Cloud370/landscape-mini/releases/latest) |
 | 自定义网络 / 密码 / 版本 / 输出格式 | [Custom Build 使用说明](./custom-build.md) |
+| 构建内置 landscape-kit 的镜像 | [内置 lkit 说明](./lkit.md) |
 | 在 PVE 中导入 / 安装 | [PVE 安装引导](./pve-install.md) |
 | 本地构建 / 测试 / 调试 | 继续看本文 |
 | English docs | [docs/en/README.md](../en/README.md) |
@@ -263,6 +264,9 @@ bash <(curl -sL https://raw.githubusercontent.com/bin456789/reinstall/main/reins
 |------|--------|------|
 | `BASE_SYSTEM` | `debian` | 基础系统：`debian` / `alpine` |
 | `INCLUDE_DOCKER` | `false` | 是否包含 Docker：`true` / `false` |
+| `INCLUDE_LKIT` | `false` | 构建期内置 landscape-kit（lkit 布局，仅 Debian），详见 [内置 lkit 说明](./lkit.md) |
+| `LKIT_VERSION` | `latest` | landscape-kit 版本，`latest` 自动解析为具体 tag |
+| `LKIT_REPO` | `https://github.com/landscape-router/landscape-kit` | landscape-kit 发布仓库 |
 | `OUTPUT_FORMATS` | `img` | 输出格式列表：`img`、`vmdk`、`ova`，逗号分隔 |
 | `RUN_TEST` | _(empty)_ | 本地测试选择：空 / `none`、`readiness`、`readiness,dataplane` |
 | `LANDSCAPE_ADMIN_USER` | `root` | Web 管理用户名 |
@@ -289,6 +293,8 @@ bash <(curl -sL https://raw.githubusercontent.com/bin456789/reinstall/main/reins
 
 - `base_system`：`debian` / `alpine`
 - `include_docker`：`true` / `false`
+- `include_lkit`：`true` / `false`（内置 landscape-kit，仅 Debian，详见 [内置 lkit 说明](./lkit.md)）
+- `lkit_version`
 - `output_formats`（统一使用 `ova` 作为 OVA 输出格式名）
 - `landscape_version`
 - `lan_server_ip` / `lan_range_start` / `lan_range_end` / `lan_netmask`

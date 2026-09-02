@@ -21,7 +21,7 @@
 # =============================================================================
 
 .PHONY: help deps deps-test \
-	build test test-dataplane test-serial test-gui ssh clean distclean cache-clean status
+	build test test-dataplane test-lkit-provision test-serial test-gui ssh clean distclean cache-clean status
 
 # --------------------------------------------------------------------------
 # Configuration
@@ -30,7 +30,7 @@
 empty :=
 space := $(empty) $(empty)
 comma := ,
-BUILD_ENV_VARS := BUILD_ENV_PROFILE BASE_SYSTEM INCLUDE_DOCKER OUTPUT_FORMATS LANDSCAPE_VERSION ROOT_PASSWORD LANDSCAPE_ADMIN_USER LANDSCAPE_ADMIN_PASS LANDSCAPE_LAN_SERVER_IP LANDSCAPE_LAN_RANGE_START LANDSCAPE_LAN_RANGE_END LANDSCAPE_LAN_NETMASK RUN_TEST EFFECTIVE_CONFIG_PATH EFFECTIVE_CONFIG_PROFILE EFFECTIVE_TOPOLOGY_SOURCE APT_MIRROR ALPINE_MIRROR DOCKER_APT_MIRROR DOCKER_APT_GPG_URL SOURCE_PROBE_TIMEOUT COMPRESS_OUTPUT LANDSCAPE_REPO IMAGE_SIZE_MB DEBIAN_RELEASE ALPINE_RELEASE TIMEZONE LOCALE EXTRA_LOCALES WORK_DIR OUTPUT_DIR CACHE_DIR BUILD_CHROOT_ENGINE LANDSCAPE_TEST_LOG_DIR SSH_PORT WEB_PORT LANDSCAPE_CONTROL_PORT QEMU_MEM QEMU_SMP MCAST_ADDR MCAST_PORT ROUTER_WAN_MAC ROUTER_LAN_MAC CLIENT_MAC
+BUILD_ENV_VARS := BUILD_ENV_PROFILE BASE_SYSTEM INCLUDE_DOCKER INCLUDE_LKIT OUTPUT_FORMATS LANDSCAPE_VERSION LKIT_REPO LKIT_VERSION ROOT_PASSWORD LANDSCAPE_ADMIN_USER LANDSCAPE_ADMIN_PASS LANDSCAPE_LAN_SERVER_IP LANDSCAPE_LAN_RANGE_START LANDSCAPE_LAN_RANGE_END LANDSCAPE_LAN_NETMASK RUN_TEST EFFECTIVE_CONFIG_PATH EFFECTIVE_CONFIG_PROFILE EFFECTIVE_TOPOLOGY_SOURCE APT_MIRROR ALPINE_MIRROR DOCKER_APT_MIRROR DOCKER_APT_GPG_URL SOURCE_PROBE_TIMEOUT COMPRESS_OUTPUT LANDSCAPE_REPO IMAGE_SIZE_MB DEBIAN_RELEASE ALPINE_RELEASE TIMEZONE LOCALE EXTRA_LOCALES WORK_DIR OUTPUT_DIR CACHE_DIR BUILD_CHROOT_ENGINE LANDSCAPE_TEST_LOG_DIR SSH_PORT WEB_PORT LANDSCAPE_CONTROL_PORT QEMU_MEM QEMU_SMP MCAST_ADDR MCAST_PORT ROUTER_WAN_MAC ROUTER_LAN_MAC CLIENT_MAC
 BUILD_PRESERVE_ENV := $(subst $(space),$(comma),$(strip $(BUILD_ENV_VARS)))
 OVMF ?= $(shell ./tests/ovmf-path.sh 2>/dev/null || echo /usr/share/ovmf/OVMF.fd)
 WORK_DIR ?= work
@@ -66,7 +66,7 @@ DISPLAY_WEB_PORT := $(if $(filter undefined,$(origin WEB_PORT)),auto,$(WEB_PORT)
 DISPLAY_MCAST_PORT := $(if $(filter undefined,$(origin MCAST_PORT)),auto,$(MCAST_PORT))
 DISPLAY_MCAST_ADDR := $(if $(filter undefined,$(origin MCAST_ADDR)),auto,$(MCAST_ADDR))
 
-IMAGE_BASENAME := landscape-mini-x86-$(if $(BASE_SYSTEM),$(BASE_SYSTEM),debian)$(if $(filter true,$(INCLUDE_DOCKER)),-docker,)
+IMAGE_BASENAME := landscape-mini-x86-$(if $(BASE_SYSTEM),$(BASE_SYSTEM),debian)$(if $(filter true,$(INCLUDE_DOCKER)),-docker,)$(if $(filter true,$(INCLUDE_LKIT)),-lkit,)
 IMAGE := $(OUTPUT_DIR)/$(IMAGE_BASENAME).img
 
 resolve_image_path = $${IMAGE_PATH:-$$( \
@@ -94,6 +94,7 @@ help: ## Show all available targets with descriptions
 	@echo "Current build identity:"
 	@echo "  BASE_SYSTEM=$(if $(BASE_SYSTEM),$(BASE_SYSTEM),<from layered env files>)"
 	@echo "  INCLUDE_DOCKER=$(if $(INCLUDE_DOCKER),$(INCLUDE_DOCKER),<from layered env files>)"
+	@echo "  INCLUDE_LKIT=$(if $(INCLUDE_LKIT),$(INCLUDE_LKIT),<from layered env files>)"
 	@echo "  OUTPUT_FORMATS=$(if $(OUTPUT_FORMATS),$(OUTPUT_FORMATS),<from layered env files>)"
 	@echo "  IMAGE=$(IMAGE)"
 	@echo "  WORK_DIR=$(WORK_DIR)"
@@ -117,9 +118,9 @@ deps: ## Install all host dependencies needed for building
 		qemu-utils qemu-system-x86 ovmf \
 		curl unzip xz-utils proot uidmap
 
-deps-test: ## Install test dependencies (sshpass, socat, curl, jq)
+deps-test: ## Install test dependencies (sshpass, socat, curl, jq, zip)
 	sudo apt-get update
-	sudo apt-get install -y sshpass socat curl jq qemu-system-x86 ovmf
+	sudo apt-get install -y sshpass socat curl jq qemu-system-x86 ovmf zip
 
 doctor: ## Check whether this machine can run the rootless build (read-only probes)
 	bash scripts/check-build-env.sh
@@ -138,6 +139,9 @@ test: ## Run readiness checks on the current raw image
 test-dataplane: ## Run dataplane checks on the current raw image
 	@image_path="$(resolve_image_path)"; \
 	$(TEST_DATAPLANE_ENV) ./tests/test-dataplane.sh "$$image_path"
+
+test-lkit-provision: ## Validate the lkit rootfs provisioning layout without booting an image
+	@./tests/test-lkit-provision.sh
 
 # --------------------------------------------------------------------------
 # Interactive QEMU targets

@@ -407,14 +407,20 @@ EOF
 # Phase 5 backend: install systemd service files
 # ---------------------------------------------------------------------------
 backend_install_landscape_services() {
-    # Copy systemd service file
-    if [[ -f "${SCRIPT_DIR}/rootfs/etc/systemd/system/landscape-router.service" ]]; then
-        echo "  Installing landscape-router.service from rootfs/ ..."
-        cp "${SCRIPT_DIR}/rootfs/etc/systemd/system/landscape-router.service" \
-            "${ROOTFS_DIR}/etc/systemd/system/landscape-router.service"
+    if [[ "${INCLUDE_LKIT}" == "true" ]]; then
+        # The lkit provisioning pre-registers its own canonical
+        # landscape-router.service / lkit.service units and wants links; the
+        # legacy standalone unit must not be installed next to them.
+        echo "  [SKIP] Legacy landscape-router.service (lkit layout provides its own units)."
     else
-        echo "  [GENERATE] Creating landscape-router.service ..."
-        cat > "${ROOTFS_DIR}/etc/systemd/system/landscape-router.service" <<'EOF'
+        # Copy systemd service file
+        if [[ -f "${SCRIPT_DIR}/rootfs/etc/systemd/system/landscape-router.service" ]]; then
+            echo "  Installing landscape-router.service from rootfs/ ..."
+            cp "${SCRIPT_DIR}/rootfs/etc/systemd/system/landscape-router.service" \
+                "${ROOTFS_DIR}/etc/systemd/system/landscape-router.service"
+        else
+            echo "  [GENERATE] Creating landscape-router.service ..."
+            cat > "${ROOTFS_DIR}/etc/systemd/system/landscape-router.service" <<'EOF'
 [Unit]
 Description=Landscape Router
 After=local-fs.target
@@ -428,6 +434,9 @@ LimitMEMLOCK=infinity
 [Install]
 WantedBy=multi-user.target
 EOF
+        fi
+        echo "  Enabling landscape-router.service ..."
+        run_rootfs_cmd "systemctl enable landscape-router.service"
     fi
 
     # Copy expand-rootfs systemd service
@@ -435,8 +444,6 @@ EOF
         "${ROOTFS_DIR}/etc/systemd/system/expand-rootfs.service"
 
     # Enable services
-    echo "  Enabling landscape-router.service ..."
-    run_rootfs_cmd "systemctl enable landscape-router.service"
     echo "  Enabling expand-rootfs.service ..."
     run_rootfs_cmd "systemctl enable expand-rootfs.service"
 }

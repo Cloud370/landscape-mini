@@ -619,6 +619,35 @@ resolve_landscape_release_version() {
 }
 
 # ---------------------------------------------------------------------------
+# Helper: resolve LKIT_VERSION="latest" to a concrete landscape-kit release
+# tag. Sets RESOLVED_LKIT_VERSION (falls back to "latest" when resolution
+# fails). Only meaningful when INCLUDE_LKIT=true.
+# ---------------------------------------------------------------------------
+resolve_lkit_release_version() {
+    if [[ "${INCLUDE_LKIT:-false}" != "true" ]]; then
+        RESOLVED_LKIT_VERSION="${LKIT_VERSION:-latest}"
+        return 0
+    fi
+
+    if [[ "${LKIT_VERSION:-latest}" != "latest" ]]; then
+        RESOLVED_LKIT_VERSION="${LKIT_VERSION}"
+        return 0
+    fi
+
+    local redirect_url tag
+    if redirect_url=$(curl -fsSIL -o /dev/null -w '%{url_effective}' --max-time 30 \
+        "${LKIT_REPO%/}/releases/latest" 2>/dev/null) \
+        && tag="${redirect_url##*/}" \
+        && [[ "${tag}" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+        RESOLVED_LKIT_VERSION="${tag}"
+        echo "  Resolved lkit 'latest' to ${tag}."
+    else
+        RESOLVED_LKIT_VERSION="latest"
+        echo "  [WARN] Could not resolve the 'latest' landscape-kit release tag; keeping 'latest'." >&2
+    fi
+}
+
+# ---------------------------------------------------------------------------
 # Helper: pin the init config `version` field to the resolved landscape version
 # Upstream (>= v0.19) requires this field to exactly match the webserver
 # build version, otherwise the router refuses to start.
@@ -853,6 +882,9 @@ write_local_build_metadata() {
     cat > "${BUILD_METADATA_FILE}" <<EOF
 base_system=${BASE_SYSTEM}
 include_docker=${INCLUDE_DOCKER}
+include_lkit=${INCLUDE_LKIT}
+lkit_version=${LKIT_VERSION:-latest}
+lkit_version_resolved=${RESOLVED_LKIT_VERSION:-${LKIT_VERSION:-latest}}
 output_formats=${OUTPUT_FORMATS}
 run_test=${RUN_TEST:-none}
 produced_files=${produced_files}
@@ -1142,6 +1174,56 @@ phase_download() {
             return 1
         }
         mv "${tmp_file}" "${static_file}"
+    fi
+
+    if [[ "${INCLUDE_LKIT}" == "true" ]]; then
+        if [[ "${RESOLVED_LKIT_VERSION}" == "latest" ]]; then
+            echo "  [ERROR] The landscape-kit release tag could not be resolved; INCLUDE_LKIT=true needs a concrete LKIT_VERSION (e.g. v0.5.0)." >&2
+            return 1
+        fi
+
+        echo "  Fetching landscape-kit ${RESOLVED_LKIT_VERSION} ..."
+        local lkit_base="${LKIT_REPO%/}/releases/download/${RESOLVED_LKIT_VERSION}"
+        local lkit_sums_file="${LKIT_DOWNLOAD_DIR}/SHA256SUMS"
+
+        mkdir -p "${LKIT_DOWNLOAD_DIR}"
+
+        if [[ ! -f "${lkit_sums_file}" ]]; then
+            echo "  Fetching lkit SHA256SUMS ..."
+            tmp_file="${lkit_sums_file}.part"
+            if curl -fsSL --retry 3 --retry-delay 2 -o "${tmp_file}" "${lkit_base}/SHA256SUMS"; then
+                mv "${tmp_file}" "${lkit_sums_file}"
+            else
+                rm -f "${tmp_file}"
+                echo "  [WARN] Could not fetch lkit SHA256SUMS; download will be unverified." >&2
+            fi
+        fi
+
+        if [[ -f "${LKIT_BINARY_FILE}" ]] \
+            && verify_download_checksum "${lkit_sums_file}" "${LKIT_BINARY_FILE}" "lkit-x86_64"; then
+            echo "  [OK] lkit-x86_64 already downloaded (cache hit)."
+        else
+            rm -f "${LKIT_BINARY_FILE}"
+            echo "  [DOWNLOADING] lkit-x86_64 ..."
+            tmp_file="${LKIT_BINARY_FILE}.part"
+            rm -f "${tmp_file}"
+            curl -fL --retry 3 --retry-delay 2 -o "${tmp_file}" "${lkit_base}/lkit-x86_64"
+            verify_download_checksum "${lkit_sums_file}" "${tmp_file}" "lkit-x86_64" || {
+                rm -f "${tmp_file}"
+                return 1
+            }
+            mv "${tmp_file}" "${LKIT_BINARY_FILE}"
+        fi
+        chmod 0755 "${LKIT_BINARY_FILE}"
+        # Smoke check on x86_64 hosts only; other hosts just verify ELF magic.
+        if [[ "$(uname -m)" == "x86_64" ]]; then
+            "${LKIT_BINARY_FILE}" --version >/dev/null
+        else
+            [[ "$(head -c 4 "${LKIT_BINARY_FILE}")" == $'\x7fELF' ]] || {
+                echo "  [ERROR] Downloaded lkit-x86_64 is not an ELF binary." >&2
+                return 1
+            }
+        fi
     fi
 
     echo "  Phase 1 complete."
@@ -1525,10 +1607,34 @@ assemble_disk_image() {
 # =============================================================================
 # Phase 5: Install Landscape Router (shared parts)
 # =============================================================================
-phase_install_landscape() {
-    echo ""
-    echo "==== Phase 5: Installing Landscape Router ===="
+# Stage the effective landscape_init.toml under the metadata dir so inputs
+# (repo template or a user-provided config) are never modified in place, local
+# builds also ship the effective config artifact, and the version field is
+# pinned / schema-checked once for both layouts. Sets STAGED_INIT_CONFIG
+# (empty when no config source exists).
+stage_effective_init_config() {
+    STAGED_INIT_CONFIG=""
 
+    local landscape_init_source="${EFFECTIVE_CONFIG_PATH:-${SCRIPT_DIR}/configs/landscape_init.toml}"
+    if [[ ! -f "${landscape_init_source}" ]]; then
+        echo "  [SKIP] No landscape_init.toml found (Landscape falls back to its default init)."
+        return 0
+    fi
+
+    echo "  Staging landscape_init.toml from ${landscape_init_source} ..."
+    local staged_init="${OUTPUT_METADATA_DIR}/effective-landscape_init.toml"
+    mkdir -p "${OUTPUT_METADATA_DIR}"
+    if [[ "$(realpath -m "${landscape_init_source}")" != "$(realpath -m "${staged_init}")" ]]; then
+        cp "${landscape_init_source}" "${staged_init}"
+    fi
+    ensure_init_config_version "${staged_init}"
+    if ! check_init_config_schema_compat "${staged_init}"; then
+        return 1
+    fi
+    STAGED_INIT_CONFIG="${staged_init}"
+}
+
+install_landscape_legacy() {
     # Copy the landscape binary (musl for Alpine, glibc for Debian)
     local bin_suffix=""
     if [[ "${BASE_SYSTEM}" == "alpine" ]]; then
@@ -1549,25 +1655,50 @@ phase_install_landscape() {
     unzip -o "${ROOTFS_DIR}/root/.landscape-router/static.zip" -d "${ROOTFS_DIR}/root/.landscape-router/"
     rm -f "${ROOTFS_DIR}/root/.landscape-router/static.zip"
 
-    # Copy effective landscape_init.toml when available, otherwise fall back to repo default.
-    local landscape_init_source="${EFFECTIVE_CONFIG_PATH:-${SCRIPT_DIR}/configs/landscape_init.toml}"
-    if [[ -f "${landscape_init_source}" ]]; then
-        echo "  Installing landscape_init.toml from ${landscape_init_source} ..."
-        # Stage a copy under the metadata dir so inputs (repo template or a
-        # user-provided config) are never modified in place, and local builds
-        # also ship the effective config artifact.
-        local staged_init="${OUTPUT_METADATA_DIR}/effective-landscape_init.toml"
-        mkdir -p "${OUTPUT_METADATA_DIR}"
-        if [[ "$(realpath -m "${landscape_init_source}")" != "$(realpath -m "${staged_init}")" ]]; then
-            cp "${landscape_init_source}" "${staged_init}"
-        fi
-        ensure_init_config_version "${staged_init}"
-        if ! check_init_config_schema_compat "${staged_init}"; then
-            return 1
-        fi
-        cp "${staged_init}" "${ROOTFS_DIR}/root/.landscape-router/landscape_init.toml"
+    stage_effective_init_config || return 1
+    if [[ -n "${STAGED_INIT_CONFIG}" ]]; then
+        cp "${STAGED_INIT_CONFIG}" "${ROOTFS_DIR}/root/.landscape-router/landscape_init.toml"
+    fi
+}
+
+# Install Landscape through the lkit-managed layout: the image ships the same
+# directory tree, unit files, and install state `lkit install` would produce,
+# so lkit owns the deployment from first boot without any migration step.
+# The image is intentionally left stopped: Landscape creates its runtime
+# database and init lock on the first boot.
+install_landscape_via_lkit() {
+    if [[ "${BASE_SYSTEM}" != "debian" ]]; then
+        echo "  [ERROR] INCLUDE_LKIT=true supports Debian only (lkit manages systemd services)." >&2
+        return 1
+    fi
+
+    stage_effective_init_config || return 1
+
+    local -a init_args=()
+    if [[ -n "${STAGED_INIT_CONFIG}" ]]; then
+        init_args=(--init "${STAGED_INIT_CONFIG}")
+    fi
+
+    bash "${SCRIPT_DIR}/scripts/provision-lkit-image.sh" \
+        --rootfs "${ROOTFS_DIR}" \
+        --version "${RESOLVED_LANDSCAPE_VERSION}" \
+        --landscape-webserver "${DOWNLOAD_DIR}/landscape-webserver-x86_64" \
+        --static-zip "${DOWNLOAD_DIR}/static.zip" \
+        --lkit "${LKIT_BINARY_FILE}" \
+        --admin-user "${LANDSCAPE_ADMIN_USER}" \
+        --admin-pass "${LANDSCAPE_ADMIN_PASS}" \
+        --created-at "${IMAGE_CREATED_AT}" \
+        "${init_args[@]}"
+}
+
+phase_install_landscape() {
+    echo ""
+    echo "==== Phase 5: Installing Landscape Router ===="
+
+    if [[ "${INCLUDE_LKIT}" == "true" ]]; then
+        install_landscape_via_lkit
     else
-        echo "  [SKIP] No landscape_init.toml found (will use --auto mode)."
+        install_landscape_legacy
     fi
 
     # Copy sysctl config
@@ -1580,14 +1711,18 @@ phase_install_landscape() {
         echo "  [SKIP] No rootfs/etc/sysctl.d/99-landscape.conf found."
     fi
 
-    # Copy build runtime environment for non-topology settings.
-    echo "  Writing runtime environment ..."
-    mkdir -p "${ROOTFS_DIR}/etc/landscape"
-    cat > "${ROOTFS_DIR}/etc/landscape/runtime.env" <<EOF
+    # Copy build runtime environment for non-topology settings (legacy
+    # layout only: its unit loads this via EnvironmentFile; the lkit unit is
+    # canonical and carries credentials inside landscape_init.toml instead).
+    if [[ "${INCLUDE_LKIT}" != "true" ]]; then
+        echo "  Writing runtime environment ..."
+        mkdir -p "${ROOTFS_DIR}/etc/landscape"
+        cat > "${ROOTFS_DIR}/etc/landscape/runtime.env" <<EOF
 LANDSCAPE_ADMIN_USER=${LANDSCAPE_ADMIN_USER}
 LANDSCAPE_ADMIN_PASS=${LANDSCAPE_ADMIN_PASS}
 EOF
-    chmod 600 "${ROOTFS_DIR}/etc/landscape/runtime.env"
+        chmod 600 "${ROOTFS_DIR}/etc/landscape/runtime.env"
+    fi
 
     # Install login welcome script
     if [[ -f "${SCRIPT_DIR}/rootfs/etc/profile.d/welcome.sh" ]]; then
@@ -1626,11 +1761,17 @@ phase_cleanup_and_shrink() {
 
     # ---- Strip landscape binary ----
     echo "  Stripping landscape-webserver binary ..."
-    if [[ -f "${ROOTFS_DIR}/root/landscape-webserver" ]]; then
+    local landscape_binary_path="${ROOTFS_DIR}/root/landscape-webserver"
+    if [[ "${INCLUDE_LKIT}" == "true" ]]; then
+        # lkit layout: the state file records the checksum of the bytes that
+        # ship, and provisioning already stripped the release copy in place.
+        landscape_binary_path="${ROOTFS_DIR}/root/.lkit/landscape/current/landscape-webserver"
+    fi
+    if [[ -f "${landscape_binary_path}" ]]; then
         local BEFORE_SIZE AFTER_SIZE
-        BEFORE_SIZE=$(stat -c%s "${ROOTFS_DIR}/root/landscape-webserver")
-        strip --strip-unneeded "${ROOTFS_DIR}/root/landscape-webserver" 2>/dev/null || true
-        AFTER_SIZE=$(stat -c%s "${ROOTFS_DIR}/root/landscape-webserver")
+        BEFORE_SIZE=$(stat -c%s "${landscape_binary_path}")
+        strip --strip-unneeded "${landscape_binary_path}" 2>/dev/null || true
+        AFTER_SIZE=$(stat -c%s "${landscape_binary_path}")
         echo "    Binary: $((BEFORE_SIZE/1024/1024))M -> $((AFTER_SIZE/1024/1024))M"
     fi
 
