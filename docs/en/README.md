@@ -14,6 +14,7 @@ Upstream project: [Landscape Router](https://github.com/ThisSeanZhang/landscape)
 |---|---|
 | Download a ready-made image | [Release page](https://github.com/Cloud370/landscape-mini/releases/latest) |
 | Customize network / passwords / version / output formats | [Custom Build Guide](./custom-build.md) |
+| Build an image with landscape-kit embedded | [Embedding lkit](./lkit.md) |
 | Import / install on PVE | [PVE Installation Guide](./pve-install.md) |
 | Build / test / debug locally | Continue reading this page |
 | 中文文档 | [docs/zh/README.md](../zh/README.md) |
@@ -267,6 +268,9 @@ Avoid using tracked `build.env` as the day-to-day customization entry point. Pre
 |------|--------|------|
 | `BASE_SYSTEM` | `debian` | Base system: `debian` / `alpine` |
 | `INCLUDE_DOCKER` | `false` | Include Docker: `true` / `false` |
+| `INCLUDE_LKIT` | `false` | Embed landscape-kit at build time (lkit layout, Debian only); see [Embedding lkit](./lkit.md) |
+| `LKIT_VERSION` | `latest` | landscape-kit version; `latest` is resolved to a concrete tag |
+| `LKIT_REPO` | `https://github.com/landscape-router/landscape-kit` | landscape-kit release repository |
 | `OUTPUT_FORMATS` | `img` | Output formats: `img`, `vmdk`, `ova` (comma-separated) |
 | `RUN_TEST` | _(empty)_ | Local test selection: empty / `none`, `readiness`, `readiness,dataplane` |
 | `LANDSCAPE_ADMIN_USER` | `root` | Web admin username |
@@ -293,6 +297,8 @@ The repository provides `custom-build.yml` as an explicit-tuple build entry poin
 
 - `base_system`: `debian` / `alpine`
 - `include_docker`: `true` / `false`
+- `include_lkit`: `true` / `false` (embed landscape-kit, Debian only; see [Embedding lkit](./lkit.md))
+- `lkit_version`
 - `output_formats` (use `ova` as the canonical OVA output format name)
 - `landscape_version`
 - `lan_server_ip` / `lan_range_start` / `lan_range_end` / `lan_netmask`

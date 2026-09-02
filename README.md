@@ -14,6 +14,7 @@ Landscape Router 的最小化 x86 镜像构建器，支持 **Debian Trixie** / *
 |---|---|
 | 直接下载现成镜像 | [Release 页面](https://github.com/Cloud370/landscape-mini/releases/latest) |
 | 自定义网络 / 密码 / 版本 / 输出格式 | [Custom Build 使用说明](./docs/zh/custom-build.md) |
+| 构建内置 landscape-kit 的镜像 | [内置 lkit 说明](./docs/zh/lkit.md) |
 | 在 PVE 中导入 / 安装 | [PVE 安装引导](./docs/zh/pve-install.md) |
 | 本地构建 / 测试 / 调试 | [中文主文档](./docs/zh/README.md) |
 | English docs | [docs/en/README.md](./docs/en/README.md) |

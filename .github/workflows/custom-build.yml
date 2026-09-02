@@ -25,6 +25,17 @@ on:
       landscape_version:
         description: "Landscape 版本（留空时使用 build.env 默认值）\nLandscape version (empty uses build.env default)"
         default: ""
+      include_lkit:
+        description: "内置 landscape-kit（编译期嵌入 lkit 布局，仅 Debian）\nEmbed landscape-kit at build time (lkit layout, Debian only)"
+        required: true
+        default: 'false'
+        type: choice
+        options:
+          - 'false'
+          - 'true'
+      lkit_version:
+        description: "landscape-kit 版本（留空/latest 用最新；如 v0.5.0）\nlandscape-kit version (empty/latest resolves the newest; e.g. v0.5.0)"
+        default: ""
       lan_server_ip:
         description: "LAN 网关或 DHCP 服务 IP（可选）\nLAN gateway / DHCP server IP (optional)"
         default: ""
@@ -72,6 +83,7 @@ jobs:
         env:
           INPUT_BASE_SYSTEM: ${{ github.event.inputs.base_system }}
           INPUT_INCLUDE_DOCKER: ${{ github.event.inputs.include_docker }}
+          INPUT_INCLUDE_LKIT: ${{ github.event.inputs.include_lkit }}
           INPUT_OUTPUT_FORMATS: ${{ github.event.inputs.output_formats }}
           INPUT_RUN_TEST: ${{ github.event.inputs.run_test }}
           INPUT_LAN_SERVER_IP: ${{ github.event.inputs.lan_server_ip }}
@@ -96,6 +108,16 @@ jobs:
               true|false) ;;
               *)
                 echo "ERROR: include_docker must be 'true' or 'false', got '$1'." >&2
+                exit 1
+                ;;
+            esac
+          }
+
+          validate_include_lkit() {
+            case "$1" in
+              true|false) ;;
+              *)
+                echo "ERROR: include_lkit must be 'true' or 'false', got '$1'." >&2
                 exit 1
                 ;;
             esac
@@ -188,6 +210,11 @@ jobs:
 
           validate_base_system "$INPUT_BASE_SYSTEM"
           validate_include_docker "$INPUT_INCLUDE_DOCKER"
+          validate_include_lkit "$INPUT_INCLUDE_LKIT"
+          if [ "$INPUT_INCLUDE_LKIT" = "true" ] && [ "$INPUT_BASE_SYSTEM" != "debian" ]; then
+            echo "ERROR: include_lkit=true supports Debian only (lkit manages systemd units)." >&2
+            exit 1
+          fi
           normalize_output_formats
           normalize_run_test_selection
           validate_ipv4 "$INPUT_LAN_SERVER_IP" lan_server_ip
@@ -287,6 +314,7 @@ jobs:
             echo "| 归一化 output_formats | ${{ steps.validate.outputs.output_formats }} |"
             echo "| 归一化 run_test | ${{ steps.validate.outputs.run_test || '(empty)' }} |"
             echo "| Landscape 版本输入 | ${{ github.event.inputs.landscape_version || '(build.env default)' }} |"
+            echo "| 内置 landscape-kit | ${{ github.event.inputs.include_lkit }}${{ github.event.inputs.include_lkit == 'true' && format('（版本 {0}）', github.event.inputs.lkit_version || 'latest') || '' }} |"
             echo "| 配置档案 | ${{ steps.meta.outputs.config_profile }} |"
             echo "| 拓扑来源 | ${{ steps.meta.outputs.topology_source }} |"
             echo ""
@@ -321,6 +349,8 @@ jobs:
       output_formats: ${{ needs.prepare.outputs.output_formats }}
       run_test: ${{ needs.prepare.outputs.run_test }}
       landscape_version: ${{ github.event.inputs.landscape_version }}
+      include_lkit: ${{ github.event.inputs.include_lkit }}
+      lkit_version: ${{ github.event.inputs.lkit_version }}
       compress_output: no
       config_profile: ${{ needs.prepare.outputs.config_profile }}
       topology_source: ${{ needs.prepare.outputs.topology_source }}
@@ -371,13 +401,14 @@ jobs:
 
           base_system=""
           include_docker=""
+          include_lkit=""
           produced_files=""
           output_formats=""
           artifact_id=""
           run_id=""
           while IFS='=' read -r key value; do
             case "$key" in
-              base_system|include_docker|produced_files|output_formats|artifact_id|run_id)
+              base_system|include_docker|include_lkit|produced_files|output_formats|artifact_id|run_id)
                 printf -v "$key" '%s' "$value"
                 ;;
             esac
@@ -394,6 +425,9 @@ jobs:
           base_name="landscape-mini-x86-${base_system}"
           if [ "$include_docker" = "true" ]; then
             base_name="${base_name}-docker"
+          fi
+          if [ "$include_lkit" = "true" ]; then
+            base_name="${base_name}-lkit"
           fi
 
           mkdir -p release-assets/latest release-assets/history
