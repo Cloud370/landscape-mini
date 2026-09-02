@@ -231,6 +231,18 @@ run_uid_mapped() {
     fi
 }
 
+# Remove the rootfs tree and recreate it empty. Full-mapping rootless builds
+# leave files owned by delegated ids behind (systemd runtime dirs, _apt
+# caches); the plain builder cannot unlink those, so the wipe has to run
+# through the same root-view used to create them.
+wipe_rootfs_tree() {
+    if [[ -d "${ROOTFS_DIR}" ]] && ! run_uid_mapped rm -rf "${ROOTFS_DIR}"; then
+        echo "ERROR: could not remove ${ROOTFS_DIR}." >&2
+        return 1
+    fi
+    mkdir -p "${ROOTFS_DIR}"
+}
+
 # ---------------------------------------------------------------------------
 # Engine-aware mount of the special filesystems for the classic chroot engine.
 # unshare/proot engines set them up per invocation instead.

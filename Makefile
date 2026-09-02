@@ -180,10 +180,13 @@ ssh: ## SSH into the running QEMU instance
 # --------------------------------------------------------------------------
 
 clean: ## Remove work directory
-	rm -rf $(WORK_DIR)/ 2>/dev/null || sudo rm -rf $(WORK_DIR)/
+	unshare --user --map-root-user --map-auto -- rm -rf $(WORK_DIR)/ 2>/dev/null \
+	  || rm -rf $(WORK_DIR)/ 2>/dev/null || sudo rm -rf $(WORK_DIR)/
 
 distclean: ## Remove work and output directories
-	rm -rf $(WORK_DIR)/ $(OUTPUT_DIR)/ 2>/dev/null || sudo rm -rf $(WORK_DIR)/ $(OUTPUT_DIR)/
+	unshare --user --map-root-user --map-auto -- rm -rf $(WORK_DIR)/ 2>/dev/null \
+	  || rm -rf $(WORK_DIR)/ $(OUTPUT_DIR)/ 2>/dev/null \
+	  || sudo rm -rf $(WORK_DIR)/ $(OUTPUT_DIR)/
 
 cache-clean: ## Remove the persistent download/package cache
 	rm -rf $(CACHE_DIR)/ 2>/dev/null || sudo rm -rf $(CACHE_DIR)/

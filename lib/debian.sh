@@ -57,8 +57,7 @@ backend_bootstrap() {
         # debootstrap's self-mounted /proc behind, which would make the
         # wipe below fail with EBUSY inside the retry (silently).
         umount_chroot_fs
-        rm -rf "${ROOTFS_DIR}"
-        mkdir -p "${ROOTFS_DIR}"
+        wipe_rootfs_tree
         run_as_build_root \
             "${deb_extract_env[@]}" \
             debootstrap \

@@ -108,7 +108,7 @@ backend_bootstrap() {
     # Start from a clean tree: apk does not remove files a previous, larger
     # build left behind, so stale packages would leak into the new image.
     umount_chroot_fs
-    rm -rf "${ROOTFS_DIR}"
+    wipe_rootfs_tree
     mkdir -p "${ROOTFS_DIR}/etc/apk"
     echo "${RESOLVED_ALPINE_MIRROR}/${ALPINE_RELEASE}/main" > "${ROOTFS_DIR}/etc/apk/repositories"
     echo "${RESOLVED_ALPINE_MIRROR}/${ALPINE_RELEASE}/community" >> "${ROOTFS_DIR}/etc/apk/repositories"
