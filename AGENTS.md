@@ -181,6 +181,10 @@ Secrets names:
 `release.yml` rebuilds Debian release artifacts on tag pushes instead of promoting CI artifacts.
 It rebuilds both Debian tuples (`include_docker=true/false`) with `img,ova`, validates metadata/config, then publishes `.img.gz` + `.ova`.
 
+Release notes stay minimal: a handful of one-line highlight bullets, no emoji, plus a link to the
+matching `CHANGELOG.md` section. The workflow's auto-generated notes should be replaced with such
+a summary after publishing (`gh release edit <tag> --notes-file ...`).
+
 ## Key files
 
 - `build.sh` — main build orchestrator
