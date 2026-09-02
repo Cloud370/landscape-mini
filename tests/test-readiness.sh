@@ -183,6 +183,13 @@ run_smoke_checks() {
         run_skip "Alpine auto-expands rootfs on first boot" "base_system=${LANDSCAPE_TEST_BASE_SYSTEM:-unknown}"
     fi
 
+    if [[ "${LANDSCAPE_TEST_BASE_SYSTEM:-}" == "debian" ]]; then
+        run_check "expand-rootfs service finished cleanly" \
+            guest_run "systemctl is-active --quiet expand-rootfs.service"
+        run_check "expand-rootfs restored setgid groups (unix_chkpwd:shadow)" \
+            guest_run "stat -c %G /usr/sbin/unix_chkpwd | grep -qx shadow"
+    fi
+
     echo ""
     echo "============================================================"
     echo "Results: ${PASS_COUNT} passed, ${FAIL_COUNT} failed, ${SKIP_COUNT} skipped"
