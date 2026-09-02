@@ -5,6 +5,8 @@ This file currently tracks unreleased work and recent notable changes.
 
 ## [Unreleased]
 
+## [0.3.0-rc.1] - 2026-09-02
+
 ### Added / 新增
 
 - Consolidate agent guidance into a single source of truth: `AGENTS.md` now carries the full guide (repo overview, build model, CI contract, key files) plus explicit hard rules, and `CLAUDE.md` is reduced to a filesystem symlink pointing at `AGENTS.md` so every agent loads the same rules; the changelog discipline is stated outright — every user-visible change must land with a bilingual `CHANGELOG.md` `[Unreleased]` entry in the same PR\
